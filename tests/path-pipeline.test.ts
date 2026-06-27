@@ -221,9 +221,13 @@ function candidate(path: string): PathCandidate {
     path,
     kind: "file",
     compressionMethod: 0,
+    uncompressedSize: 0,
     absoluteFromReplace: false,
     isSymlink: false,
     readData: async (_options) => {
+      throw new Error("content should not be read");
+    },
+    streamData: async function* (_options) {
       throw new Error("content should not be read");
     },
   };

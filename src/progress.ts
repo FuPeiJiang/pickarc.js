@@ -115,11 +115,7 @@ export class CopyProgress {
   }
 
   finish(): void {
-    if (!this.enabled) {
-      return;
-    }
-
-    this.#render(true);
+    return;
   }
 
   #render(force: boolean): void {

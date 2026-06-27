@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -129,6 +129,35 @@ describe("pickarc commands", () => {
 
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain("CRC32 mismatch");
+    await expect(stat(path.join(directory, "bad.txt"))).rejects.toThrow();
+  });
+
+  test("cp can render forced progress with bold labels and cyan bars", async () => {
+    const directory = await makeTempDir();
+    const archive = await writeZip(directory, "fixture.zip", [{ path: "file.txt", data: "body" }]);
+
+    const result = await runPickarc(["cp", "--progress", "always", archive], directory, {
+      FORCE_COLOR: "1",
+      NO_COLOR: undefined,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain("\x1b[1mfile.txt\x1b[0m");
+    expect(result.stderr).toContain("\x1b[36m");
+    expect(result.stderr).toContain("total");
+    expect(await readText(path.join(directory, "file.txt"))).toBe("body");
+  });
+
+  test("cp can disable progress explicitly", async () => {
+    const directory = await makeTempDir();
+    const archive = await writeZip(directory, "fixture.zip", [{ path: "file.txt", data: "body" }]);
+
+    const result = await runPickarc(["cp", "--progress", "never", archive], directory, {
+      FORCE_COLOR: "1",
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
   });
 
   test("expands stored nested zip entries as directories", async () => {
@@ -227,6 +256,7 @@ async function writeZip(
 async function runPickarc(
   args: readonly string[],
   cwd: string,
+  env?: Record<string, string | undefined>,
 ): Promise<{
   stdout: string;
   stderr: string;
@@ -234,6 +264,7 @@ async function runPickarc(
 }> {
   const process = Bun.spawn(["bun", cliPath, ...args], {
     cwd,
+    env: mergeEnv(env),
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -253,4 +284,30 @@ async function runPickarc(
 
 async function readText(file: string): Promise<string> {
   return new TextDecoder().decode(await readFile(file));
+}
+
+function processEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined) {
+      env[key] = value;
+    }
+  }
+
+  return env;
+}
+
+function mergeEnv(overrides: Record<string, string | undefined> | undefined): Record<string, string> {
+  const env = processEnv();
+
+  for (const [key, value] of Object.entries(overrides ?? {})) {
+    if (value === undefined) {
+      delete env[key];
+    } else {
+      env[key] = value;
+    }
+  }
+
+  return env;
 }

@@ -36,6 +36,7 @@ Commands:
 Options:
   --proxy <url>
   --lockdown <path>
+  --progress <auto|always|never>, --no-progress
   --ignore-checksum <regex>
   --include <regex>, --match <regex>, --matches <regex>
   --include-glob <glob>, --match-glob <glob>, --matches-glob <glob>

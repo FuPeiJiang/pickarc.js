@@ -98,6 +98,26 @@ pickarc cp archive.zip \
 
 `cp` writes files with exclusive create flags and `O_NOFOLLOW`, mode `0600`, and refuses to overwrite existing files. Existing symlinked parent directories are rejected during directory creation/walk checks.
 
+`cp` shows progress on `stderr` when running in an interactive terminal. Control it with:
+
+```sh
+--progress auto
+--progress always
+--progress never
+--no-progress
+```
+
+The progress display uses ASCII bars with color when the terminal allows it:
+
+```text
+libclang_rt.asan.so
+    18.2 MiB / 53.6 MiB  [#######-------------]   34%  8.4 MiB/s
+  total
+    375 MiB / 612 MiB    [############--------]   61%  3,812/6,230
+```
+
+`NO_COLOR` disables color. `FORCE_COLOR=1` enables color when `--progress always` is used outside a TTY.
+
 ## Checksums
 
 CRC32 is checked when reading file contents. `--ignore-checksum <regex>` skips the check only when the final path matches:

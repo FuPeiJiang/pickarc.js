@@ -83,9 +83,11 @@ function candidateFromZipEntry(
     path,
     kind: entry.kind,
     compressionMethod: entry.compressionMethod,
+    uncompressedSize: entry.uncompressedSize,
     absoluteFromReplace,
     isSymlink: entry.isSymlink,
     readData: (options) => archive.readEntry(entry, options),
+    streamData: (options) => archive.streamEntry(entry, options),
   };
 }
 

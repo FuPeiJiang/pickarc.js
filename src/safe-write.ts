@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { lstat, mkdir, open } from "node:fs/promises";
+import { lstat, mkdir, open, unlink } from "node:fs/promises";
 import path from "node:path";
 import { fail } from "./errors.ts";
 
@@ -57,6 +57,44 @@ export async function writeFileExclusive(
     await handle.writeFile(data);
   } finally {
     await handle.close();
+  }
+}
+
+export async function writeFileExclusiveStream(
+  finalPath: string,
+  chunks: AsyncIterable<Uint8Array>,
+  lockdown: string | undefined,
+  onChunk?: (bytes: number) => void,
+): Promise<void> {
+  const { target, lockdownRoot } = await resolveOutputPath(finalPath, lockdown);
+  await ensureDirectory(path.dirname(target), lockdownRoot);
+
+  let handle;
+  let completed = false;
+
+  try {
+    handle = await open(
+      target,
+      constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
+      0o600,
+    );
+  } catch (error) {
+    failOpen(target, error);
+  }
+
+  try {
+    for await (const chunk of chunks) {
+      await writeAll(handle, chunk);
+      onChunk?.(chunk.byteLength);
+    }
+
+    completed = true;
+  } finally {
+    await handle.close();
+
+    if (!completed) {
+      await unlink(target).catch(() => undefined);
+    }
   }
 }
 
@@ -154,4 +192,16 @@ function failOpen(target: string, error: unknown): never {
 
 function isNotFound(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+}
+
+async function writeAll(
+  handle: Awaited<ReturnType<typeof open>>,
+  chunk: Uint8Array,
+): Promise<void> {
+  let offset = 0;
+
+  while (offset < chunk.byteLength) {
+    const result = await handle.write(chunk, offset, chunk.byteLength - offset);
+    offset += result.bytesWritten;
+  }
 }

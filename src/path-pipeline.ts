@@ -44,9 +44,11 @@ export interface PathCandidate {
   path: string;
   kind: "file" | "directory";
   compressionMethod: number | undefined;
+  uncompressedSize: number;
   absoluteFromReplace: boolean;
   isSymlink: boolean;
   readData: (options: { checkCrc: boolean }) => Promise<Uint8Array>;
+  streamData: (options: { checkCrc: boolean }) => AsyncIterable<Uint8Array>;
 }
 
 export type ExpandAsDir = (

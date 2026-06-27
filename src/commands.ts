@@ -2,7 +2,8 @@ import { collectArchiveCandidates, expandStoredZipAsDirectory } from "./archive.
 import { fail } from "./errors.ts";
 import type { ParsedArgs } from "./options.ts";
 import { prepareFinalCandidates, type PathCandidate } from "./path-pipeline.ts";
-import { createDirectory, writeFileExclusive } from "./safe-write.ts";
+import { CopyProgress } from "./progress.ts";
+import { createDirectory, writeFileExclusiveStream } from "./safe-write.ts";
 
 export async function runCommand(options: ParsedArgs): Promise<void> {
   const archiveSet = await collectArchiveCandidates(options.archives, {
@@ -26,7 +27,7 @@ export async function runCommand(options: ParsedArgs): Promise<void> {
         break;
 
       case "cp":
-        await copy(candidates, options.ignoreChecksum, options.lockdown);
+        await copy(candidates, options.ignoreChecksum, options.lockdown, options.progress);
         break;
     }
   } finally {
@@ -59,7 +60,18 @@ async function copy(
   candidates: readonly PathCandidate[],
   ignoreChecksum: readonly RegExp[],
   lockdown: string | undefined,
+  progressMode: ParsedArgs["progress"],
 ): Promise<void> {
+  const files = candidates.filter((candidate) => candidate.kind === "file");
+  const progress = new CopyProgress({
+    mode: progressMode,
+  });
+
+  progress.start({
+    filesTotal: files.length,
+    bytesTotal: files.reduce((total, candidate) => total + candidate.uncompressedSize, 0),
+  });
+
   for (const candidate of candidates) {
     if (candidate.kind === "directory") {
       await createDirectory(candidate.path, lockdown);
@@ -70,11 +82,26 @@ async function copy(
       fail(`${candidate.path}: refusing to extract ZIP symlink entry`);
     }
 
-    const data = await candidate.readData({
-      checkCrc: shouldCheckChecksum(candidate.path, ignoreChecksum),
+    progress.startFile({
+      path: candidate.path,
+      bytesTotal: candidate.uncompressedSize,
     });
-    await writeFileExclusive(candidate.path, data, lockdown);
+
+    await writeFileExclusiveStream(
+      candidate.path,
+      candidate.streamData({
+        checkCrc: shouldCheckChecksum(candidate.path, ignoreChecksum),
+      }),
+      lockdown,
+      (bytes) => {
+        progress.advanceFile(bytes);
+      },
+    );
+
+    progress.finishFile();
   }
+
+  progress.finish();
 }
 
 function shouldCheckChecksum(path: string, ignoreChecksum: readonly RegExp[]): boolean {
