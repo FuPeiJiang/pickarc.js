@@ -171,8 +171,15 @@ export class HttpRangeSource implements RangeSource {
   }
 
   private async fetch(init: RequestInit): Promise<Response> {
+    const headers = new Headers(init.headers);
+
+    if (!headers.has("accept-encoding")) {
+      headers.set("accept-encoding", "identity");
+    }
+
     const requestInit: RequestInit = {
       ...init,
+      headers,
       redirect: "follow",
     };
 
