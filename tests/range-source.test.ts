@@ -83,11 +83,29 @@ describe("HttpRangeSource", () => {
     const cached = new ReadAheadRangeSource(source, {
       windowSize: 4,
       maxWindows: 2,
+      maxPrefetches: 0,
     });
 
     expect(Array.from(await cached.read(1, 1))).toEqual([2]);
     expect(Array.from(await cached.read(2, 2))).toEqual([3, 4]);
     expect(source.reads).toEqual([{ offset: 1, length: 4 }]);
+  });
+
+  test("prefetches the next adjacent read-ahead window", async () => {
+    const source = new CountingRangeSource(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]));
+    const cached = new ReadAheadRangeSource(source, {
+      windowSize: 4,
+      maxWindows: 4,
+      maxPrefetches: 1,
+    });
+
+    expect(Array.from(await cached.read(0, 1))).toEqual([1]);
+    await Bun.sleep(10);
+    expect(Array.from(await cached.read(4, 2))).toEqual([5, 6]);
+    expect(source.reads).toEqual([
+      { offset: 0, length: 4 },
+      { offset: 4, length: 4 },
+    ]);
   });
 });
 

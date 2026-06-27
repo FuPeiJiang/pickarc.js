@@ -116,7 +116,7 @@ pickarc cp archive.zip \
 
 `cp` writes files with exclusive create flags and `O_NOFOLLOW`, mode `0600`, and refuses to overwrite existing files. Existing symlinked parent directories are rejected during directory creation/walk checks.
 
-For remote ZIPs, `cp` validates final paths first, then downloads files in physical archive order. HTTP sources use a bounded read-ahead range cache so adjacent small files can be served from larger range reads instead of many tiny requests.
+For remote ZIPs, `cp` validates final paths first, then downloads files in physical archive order. It resolves selected ZIP data offsets, merges nearby compressed byte ranges into bounded exact range reads, and serves per-file extraction from that cache instead of making thousands of tiny requests.
 
 `cp` shows progress on `stderr` when running in an interactive terminal. Control it with:
 
@@ -125,6 +125,7 @@ For remote ZIPs, `cp` validates final paths first, then downloads files in physi
 --progress always
 --progress never
 --no-progress
+--jobs 1
 ```
 
 The progress display uses ASCII bars with color when the terminal allows it:
@@ -137,6 +138,8 @@ libclang_rt.asan.so
 ```
 
 `NO_COLOR` disables color. `FORCE_COLOR=1` enables color when `--progress always` is used outside a TTY.
+
+`--jobs <n>` controls file extraction concurrency. The default is `1`; higher values can help on some machines, but the Android NDK benchmark is faster sequentially after range grouping.
 
 ## Checksums
 

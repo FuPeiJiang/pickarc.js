@@ -102,6 +102,14 @@ describe("path pipeline", () => {
     );
   });
 
+  test("parses jobs option", () => {
+    expect(parseArgs(["cp", "--jobs", "8", "archive.zip"]).jobs).toBe(8);
+    expect(parseArgs(["cp", "archive.zip"]).jobs).toBe(1);
+    expect(() => parseArgs(["cp", "--jobs", "0", "archive.zip"])).toThrow(
+      "expected a positive integer",
+    );
+  });
+
   test("parses http transport options", () => {
     expect(parseArgs(["ls", "--http", "http1", "archive.zip"]).httpTransport).toBe("http1");
     expect(parseArgs(["ls", "--http", "http2", "archive.zip"]).httpTransport).toBe("http2");
@@ -230,6 +238,7 @@ function candidate(path: string): PathCandidate {
     path,
     kind: "file",
     compressionMethod: 0,
+    compressedSize: 0,
     uncompressedSize: 0,
     physicalOffset: undefined,
     absoluteFromReplace: false,
@@ -240,5 +249,7 @@ function candidate(path: string): PathCandidate {
     streamData: async function* (_options) {
       throw new Error("content should not be read");
     },
+    dataRange: async () => undefined,
+    primeRange: async (_offset, _length) => {},
   };
 }

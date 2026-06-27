@@ -38,6 +38,7 @@ Options:
   --http <fetch|http1|http2>
   --lockdown <path>
   --progress <auto|always|never>, --no-progress
+  --jobs <n>
   --ignore-checksum <regex>
   --include <regex>, --match <regex>, --matches <regex>
   --include-glob <glob>, --match-glob <glob>, --matches-glob <glob>

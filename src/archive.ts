@@ -85,12 +85,15 @@ function candidateFromZipEntry(
     path,
     kind: entry.kind,
     compressionMethod: entry.compressionMethod,
+    compressedSize: entry.compressedSize,
     uncompressedSize: entry.uncompressedSize,
     physicalOffset: entry.localHeaderOffset,
     absoluteFromReplace,
     isSymlink: entry.isSymlink,
     readData: (options) => archive.readEntry(entry, options),
     streamData: (options) => archive.streamEntry(entry, options),
+    dataRange: () => archive.entryDataRange(entry),
+    primeRange: (offset, length) => archive.primeRange(offset, length),
   };
 }
 

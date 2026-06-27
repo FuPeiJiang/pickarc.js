@@ -1,5 +1,5 @@
 import { Readable } from "node:stream";
-import { createInflateRaw } from "node:zlib";
+import { createInflateRaw, inflateRawSync } from "node:zlib";
 import { Crc32 } from "./crc32.ts";
 import { fail } from "./errors.ts";
 import { BufferRangeSource, type RangeSource } from "./range-source.ts";
@@ -38,6 +38,11 @@ export interface StreamEntryOptions extends ReadEntryOptions {
   chunkSize?: number;
 }
 
+export interface ZipEntryDataRange {
+  offset: number;
+  length: number;
+}
+
 interface CentralDirectoryInfo {
   offset: number;
   size: number;
@@ -48,6 +53,7 @@ export class ZipArchive {
   readonly label: string;
   readonly #source: RangeSource;
   #entries: ZipEntry[] | undefined;
+  #dataOffsets = new Map<number, number>();
 
   constructor(source: RangeSource, label = source.label) {
     this.#source = source;
@@ -141,20 +147,37 @@ export class ZipArchive {
   }
 
   async readEntry(entry: ZipEntry, options: ReadEntryOptions): Promise<Uint8Array> {
-    const chunks: Uint8Array[] = [];
-    let total = 0;
-
-    for await (const chunk of this.streamEntry(entry, options)) {
-      chunks.push(chunk);
-      total += chunk.byteLength;
+    if ((entry.flags & 1) !== 0) {
+      fail(`${entry.path}: encrypted ZIP entries are not supported`);
     }
 
-    const data = new Uint8Array(total);
-    let offset = 0;
+    const { offset } = await this.entryDataRange(entry);
+    const compressed = await this.#source.read(offset, entry.compressedSize);
+    let data: Uint8Array;
 
-    for (const chunk of chunks) {
-      data.set(chunk, offset);
-      offset += chunk.byteLength;
+    switch (entry.compressionMethod) {
+      case 0:
+        data = compressed;
+        break;
+
+      case 8:
+        data = inflateRawSync(compressed);
+        break;
+
+      default:
+        fail(`${entry.path}: unsupported ZIP compression method ${entry.compressionMethod}`);
+    }
+
+    if (data.byteLength !== entry.uncompressedSize) {
+      fail(`${entry.path}: uncompressed size mismatch`);
+    }
+
+    if (options.checkCrc) {
+      const actual = new Crc32().update(data).digest();
+
+      if (actual !== entry.crc32) {
+        fail(`${entry.path}: CRC32 mismatch`);
+      }
     }
 
     return data;
@@ -165,7 +188,7 @@ export class ZipArchive {
       fail(`${entry.path}: encrypted ZIP entries are not supported`);
     }
 
-    const dataOffset = await this.readDataOffset(entry);
+    const { offset: dataOffset } = await this.entryDataRange(entry);
     const chunkSize = options.chunkSize ?? 1024 * 1024;
     const crc = new Crc32();
     let uncompressedBytes = 0;
@@ -222,6 +245,17 @@ export class ZipArchive {
         fail(`${entry.path}: CRC32 mismatch`);
       }
     }
+  }
+
+  async entryDataRange(entry: ZipEntry): Promise<ZipEntryDataRange> {
+    return {
+      offset: await this.readDataOffset(entry),
+      length: entry.compressedSize,
+    };
+  }
+
+  async primeRange(offset: number, length: number): Promise<void> {
+    await this.#source.prime?.(offset, length);
   }
 
   private async readCentralDirectoryInfo(): Promise<CentralDirectoryInfo> {
@@ -308,6 +342,12 @@ export class ZipArchive {
   }
 
   private async readDataOffset(entry: ZipEntry): Promise<number> {
+    const cached = this.#dataOffsets.get(entry.index);
+
+    if (cached !== undefined) {
+      return cached;
+    }
+
     const header = await this.#source.read(entry.localHeaderOffset, 30);
     const view = viewOf(header);
 
@@ -317,7 +357,9 @@ export class ZipArchive {
 
     const nameLength = view.getUint16(26, true);
     const extraLength = view.getUint16(28, true);
-    return entry.localHeaderOffset + 30 + nameLength + extraLength;
+    const offset = entry.localHeaderOffset + 30 + nameLength + extraLength;
+    this.#dataOffsets.set(entry.index, offset);
+    return offset;
   }
 
   private async *readStoredChunks(

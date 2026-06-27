@@ -11,6 +11,7 @@ export interface RangeSource {
   readonly label: string;
   size(): Promise<number>;
   read(offset: number, length: number): Promise<Uint8Array>;
+  prime?(offset: number, length: number): Promise<void>;
   close?(): Promise<void>;
 }
 
@@ -68,19 +69,31 @@ interface CacheWindow {
   lastUsed: number;
 }
 
+interface PrefetchWindow {
+  offset: number;
+  length: number;
+  promise: Promise<Uint8Array | Error>;
+}
+
 export class ReadAheadRangeSource implements RangeSource {
   readonly label: string;
   readonly #source: RangeSource;
   readonly #windowSize: number;
   readonly #maxWindows: number;
+  readonly #maxPrefetches: number;
   #windows: CacheWindow[] = [];
+  #prefetches: PrefetchWindow[] = [];
   #clock = 0;
 
-  constructor(source: RangeSource, options?: { windowSize?: number; maxWindows?: number }) {
+  constructor(
+    source: RangeSource,
+    options?: { windowSize?: number; maxWindows?: number; maxPrefetches?: number },
+  ) {
     this.#source = source;
     this.label = source.label;
     this.#windowSize = options?.windowSize ?? 4 * 1024 * 1024;
     this.#maxWindows = options?.maxWindows ?? 4;
+    this.#maxPrefetches = options?.maxPrefetches ?? 0;
   }
 
   async size(): Promise<number> {
@@ -105,14 +118,33 @@ export class ReadAheadRangeSource implements RangeSource {
       return this.#source.read(offset, length);
     }
 
+    const prefetched = await this.findPrefetch(offset, length);
+
+    if (prefetched !== undefined) {
+      this.schedulePrefetch(prefetched.offset + prefetched.bytes.byteLength, size);
+      return prefetched.bytes.slice(offset - prefetched.offset, offset - prefetched.offset + length);
+    }
+
     const readLength = Math.min(this.#windowSize, size - offset);
     const bytes = await this.#source.read(offset, readLength);
     this.addWindow(offset, bytes);
+    this.schedulePrefetch(offset + readLength, size);
     return bytes.slice(0, length);
   }
 
   async close(): Promise<void> {
     await this.#source.close?.();
+  }
+
+  async prime(offset: number, length: number): Promise<void> {
+    const size = await this.size();
+    assertRange(offset, length, size, this.label);
+
+    if (length === 0 || this.findWindow(offset, length) !== undefined) {
+      return;
+    }
+
+    this.addWindow(offset, await this.#source.read(offset, length));
   }
 
   private findWindow(offset: number, length: number): Uint8Array | undefined {
@@ -126,6 +158,70 @@ export class ReadAheadRangeSource implements RangeSource {
     }
 
     return undefined;
+  }
+
+  private async findPrefetch(
+    offset: number,
+    length: number,
+  ): Promise<{ offset: number; bytes: Uint8Array } | undefined> {
+    const prefetch = this.#prefetches.find(
+      (item) => offset >= item.offset && offset + length <= item.offset + item.length,
+    );
+
+    if (prefetch === undefined) {
+      return undefined;
+    }
+
+    const bytes = await prefetch.promise;
+
+    if (bytes instanceof Error) {
+      throw bytes;
+    }
+
+    return {
+      offset: prefetch.offset,
+      bytes,
+    };
+  }
+
+  private schedulePrefetch(offset: number, size: number): void {
+    if (this.#maxPrefetches <= 0 || offset >= size) {
+      return;
+    }
+
+    if (this.findWindow(offset, 1) !== undefined) {
+      return;
+    }
+
+    if (this.#prefetches.some((item) => offset >= item.offset && offset < item.offset + item.length)) {
+      return;
+    }
+
+    while (this.#prefetches.length >= this.#maxPrefetches) {
+      this.#prefetches.shift();
+    }
+
+    const length = Math.min(this.#windowSize, size - offset);
+    const prefetch: PrefetchWindow = {
+      offset,
+      length,
+      promise: this.#source.read(offset, length).then(
+        (bytes) => {
+          this.addWindow(offset, bytes);
+          return bytes;
+        },
+        (error: unknown) => (error instanceof Error ? error : new Error(String(error))),
+      ),
+    };
+
+    this.#prefetches.push(prefetch);
+    prefetch.promise.finally(() => {
+      const index = this.#prefetches.indexOf(prefetch);
+
+      if (index !== -1) {
+        this.#prefetches.splice(index, 1);
+      }
+    });
   }
 
   private addWindow(offset: number, bytes: Uint8Array): void {

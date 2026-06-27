@@ -15,6 +15,7 @@ export interface ParsedArgs {
   httpTransport: HttpTransport;
   lockdown: string | undefined;
   progress: ProgressMode;
+  jobs: number;
 }
 
 export function parseArgs(argv: readonly string[]): ParsedArgs {
@@ -31,6 +32,7 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
   let httpTransport: HttpTransport = "fetch";
   let lockdown: string | undefined;
   let progress: ProgressMode = "auto";
+  let jobs = 1;
   let optionsEnded = false;
 
   for (let index = 1; index < argv.length; index += 1) {
@@ -66,6 +68,10 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
 
       case "--progress":
         progress = parseProgressMode(requireValue(argv, ++index, arg));
+        break;
+
+      case "--jobs":
+        jobs = parsePositiveInteger(requireValue(argv, ++index, arg), arg);
         break;
 
       case "--no-progress":
@@ -210,6 +216,7 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
     httpTransport,
     lockdown,
     progress,
+    jobs,
   };
 }
 
@@ -255,6 +262,14 @@ function appendOrMatcher(
 function parseNonNegativeInteger(value: string, option: string): number {
   if (!/^(?:0|[1-9]\d*)$/.test(value)) {
     fail(`${option}: expected a non-negative integer`);
+  }
+
+  return Number(value);
+}
+
+function parsePositiveInteger(value: string, option: string): number {
+  if (!/^[1-9]\d*$/.test(value)) {
+    fail(`${option}: expected a positive integer`);
   }
 
   return Number(value);

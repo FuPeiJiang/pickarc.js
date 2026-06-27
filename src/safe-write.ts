@@ -152,7 +152,11 @@ async function ensureDirectory(directory: string, lockdownRoot: string | undefin
       }
     } catch (error) {
       if (isNotFound(error)) {
-        await mkdir(current, { mode: 0o700 });
+        await mkdir(current, { mode: 0o700 }).catch((mkdirError: unknown) => {
+          if (!isAlreadyExists(mkdirError)) {
+            throw mkdirError;
+          }
+        });
         const info = await lstat(current);
 
         if (info.isSymbolicLink() || !info.isDirectory()) {
@@ -192,6 +196,10 @@ function failOpen(target: string, error: unknown): never {
 
 function isNotFound(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+}
+
+function isAlreadyExists(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST";
 }
 
 async function writeAll(
