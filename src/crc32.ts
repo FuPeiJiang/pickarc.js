@@ -11,11 +11,21 @@ for (let i = 0; i < table.length; i += 1) {
 }
 
 export function crc32(data: Uint8Array): number {
-  let crc = 0xffffffff;
+  return new Crc32().update(data).digest();
+}
 
-  for (const byte of data) {
-    crc = table[(crc ^ byte) & 0xff]! ^ (crc >>> 8);
+export class Crc32 {
+  #crc = 0xffffffff;
+
+  update(data: Uint8Array): this {
+    for (const byte of data) {
+      this.#crc = table[(this.#crc ^ byte) & 0xff]! ^ (this.#crc >>> 8);
+    }
+
+    return this;
   }
 
-  return (crc ^ 0xffffffff) >>> 0;
+  digest(): number {
+    return (this.#crc ^ 0xffffffff) >>> 0;
+  }
 }

@@ -1,5 +1,6 @@
-import { inflateRawSync } from "node:zlib";
-import { crc32 } from "./crc32.ts";
+import { Readable } from "node:stream";
+import { createInflateRaw } from "node:zlib";
+import { Crc32 } from "./crc32.ts";
 import { fail } from "./errors.ts";
 import { BufferRangeSource, type RangeSource } from "./range-source.ts";
 import { normalizeArchivePath } from "./path-utils.ts";
@@ -31,6 +32,10 @@ export interface ZipEntry {
 
 export interface ReadEntryOptions {
   checkCrc: boolean;
+}
+
+export interface StreamEntryOptions extends ReadEntryOptions {
+  chunkSize?: number;
 }
 
 interface CentralDirectoryInfo {
@@ -136,40 +141,87 @@ export class ZipArchive {
   }
 
   async readEntry(entry: ZipEntry, options: ReadEntryOptions): Promise<Uint8Array> {
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+
+    for await (const chunk of this.streamEntry(entry, options)) {
+      chunks.push(chunk);
+      total += chunk.byteLength;
+    }
+
+    const data = new Uint8Array(total);
+    let offset = 0;
+
+    for (const chunk of chunks) {
+      data.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+
+    return data;
+  }
+
+  async *streamEntry(entry: ZipEntry, options: StreamEntryOptions): AsyncGenerator<Uint8Array> {
     if ((entry.flags & 1) !== 0) {
       fail(`${entry.path}: encrypted ZIP entries are not supported`);
     }
 
     const dataOffset = await this.readDataOffset(entry);
-    const compressed = await this.#source.read(dataOffset, entry.compressedSize);
-    let data: Uint8Array;
+    const chunkSize = options.chunkSize ?? 1024 * 1024;
+    const crc = new Crc32();
+    let uncompressedBytes = 0;
 
     switch (entry.compressionMethod) {
-      case 0:
-        data = compressed;
-        break;
+      case 0: {
+        for await (const chunk of this.readStoredChunks(dataOffset, entry.compressedSize, chunkSize)) {
+          uncompressedBytes += chunk.byteLength;
 
-      case 8:
-        data = inflateRawSync(compressed);
+          if (options.checkCrc) {
+            crc.update(chunk);
+          }
+
+          yield chunk;
+        }
+
         break;
+      }
+
+      case 8: {
+        const compressedChunks = this.readStoredChunks(dataOffset, entry.compressedSize, chunkSize);
+        const stream = Readable.from(compressedChunks).pipe(createInflateRaw());
+
+        for await (const output of stream) {
+          const chunk = asUint8Array(output);
+          uncompressedBytes += chunk.byteLength;
+
+          if (uncompressedBytes > entry.uncompressedSize) {
+            fail(`${entry.path}: uncompressed size mismatch`);
+          }
+
+          if (options.checkCrc) {
+            crc.update(chunk);
+          }
+
+          yield chunk;
+        }
+
+        break;
+      }
 
       default:
         fail(`${entry.path}: unsupported ZIP compression method ${entry.compressionMethod}`);
     }
 
-    if (data.byteLength !== entry.uncompressedSize) {
+    if (uncompressedBytes !== entry.uncompressedSize) {
       fail(`${entry.path}: uncompressed size mismatch`);
     }
 
     if (options.checkCrc) {
-      const actual = crc32(data);
+      const actual = crc.digest();
 
       if (actual !== entry.crc32) {
         fail(`${entry.path}: CRC32 mismatch`);
       }
     }
-
-    return data;
   }
 
   private async readCentralDirectoryInfo(): Promise<CentralDirectoryInfo> {
@@ -267,6 +319,36 @@ export class ZipArchive {
     const extraLength = view.getUint16(28, true);
     return entry.localHeaderOffset + 30 + nameLength + extraLength;
   }
+
+  private async *readStoredChunks(
+    offset: number,
+    size: number,
+    chunkSize: number,
+  ): AsyncGenerator<Uint8Array> {
+    if (!Number.isSafeInteger(chunkSize) || chunkSize <= 0) {
+      fail(`${this.label}: invalid ZIP stream chunk size`);
+    }
+
+    let position = 0;
+
+    while (position < size) {
+      const length = Math.min(chunkSize, size - position);
+      yield await this.#source.read(offset + position, length);
+      position += length;
+    }
+  }
+}
+
+function asUint8Array(value: unknown): Uint8Array {
+  if (value instanceof Uint8Array) {
+    return value;
+  }
+
+  if (value instanceof ArrayBuffer) {
+    return new Uint8Array(value);
+  }
+
+  fail(`zlib stream produced an unsupported chunk`);
 }
 
 function readZip64Extra(

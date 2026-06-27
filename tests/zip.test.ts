@@ -43,6 +43,27 @@ describe("ZipArchive", () => {
     );
   });
 
+  test("streams stored and deflated entry data in chunks", async () => {
+    const archive = ZipArchive.fromBuffer(
+      makeZip([
+        { path: "stored.txt", data: "stored chunks" },
+        { path: "deflated.txt", data: "deflated chunks", method: 8 },
+      ]),
+      "fixture.zip",
+    );
+
+    const entries = await archive.entries();
+    const stored = entries.find((entry) => entry.path === "stored.txt")!;
+    const deflated = entries.find((entry) => entry.path === "deflated.txt")!;
+
+    expect(await readStreamText(archive.streamEntry(stored, { checkCrc: true, chunkSize: 3 }))).toBe(
+      "stored chunks",
+    );
+    expect(
+      await readStreamText(archive.streamEntry(deflated, { checkCrc: true, chunkSize: 3 })),
+    ).toBe("deflated chunks");
+  });
+
   test("reports CRC mismatch", async () => {
     const archive = ZipArchive.fromBuffer(
       makeZip([
@@ -79,3 +100,23 @@ describe("ZipArchive", () => {
     await expect(source.read(3, 2)).rejects.toThrow("range exceeds");
   });
 });
+
+async function readStreamText(chunks: AsyncIterable<Uint8Array>): Promise<string> {
+  const parts: Uint8Array[] = [];
+  let total = 0;
+
+  for await (const chunk of chunks) {
+    parts.push(chunk);
+    total += chunk.byteLength;
+  }
+
+  const output = new Uint8Array(total);
+  let offset = 0;
+
+  for (const part of parts) {
+    output.set(part, offset);
+    offset += part.byteLength;
+  }
+
+  return new TextDecoder().decode(output);
+}
