@@ -44,5 +44,11 @@ export function globMatcher(pattern: string, option: string): PathMatcher {
 }
 
 export function matchesAny(matchers: readonly PathMatcher[], path: string): boolean {
-  return matchers.some((matcher) => matcher.matches(path));
+  for (let index = 0; index < matchers.length; index += 1) {
+    if (matchers[index]!.matches(path)) {
+      return true;
+    }
+  }
+
+  return false;
 }

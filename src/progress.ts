@@ -42,6 +42,13 @@ export interface CopyProgressSnapshot {
   bytesPerSecond: number;
 }
 
+export interface PlanningProgressSnapshot {
+  label: string;
+  path: string;
+  filesDone: number;
+  filesTotal: number;
+}
+
 export interface RenderProgressOptions {
   color: boolean;
   columns: number;
@@ -63,6 +70,10 @@ export class CopyProgress {
   #fileStartedAt = 0;
   #lastRenderAt = 0;
   #linesRendered = 0;
+  #planningLabel = "";
+  #planningPath = "";
+  #planningFilesDone = 0;
+  #planningFilesTotal = 0;
 
   constructor(options: CopyProgressOptions) {
     this.#stream = options.stream ?? process.stderr;
@@ -80,6 +91,37 @@ export class CopyProgress {
 
     this.#filesTotal = totals.filesTotal;
     this.#bytesTotal = totals.bytesTotal;
+  }
+
+  startPlanning(options: { label: string; filesTotal: number }): void {
+    if (!this.enabled) {
+      return;
+    }
+
+    this.#planningLabel = options.label;
+    this.#planningPath = "";
+    this.#planningFilesDone = 0;
+    this.#planningFilesTotal = options.filesTotal;
+    this.#renderPlanning(true);
+  }
+
+  advancePlanning(options: { path: string; filesDone: number }): void {
+    if (!this.enabled) {
+      return;
+    }
+
+    this.#planningPath = options.path;
+    this.#planningFilesDone = options.filesDone;
+    this.#renderPlanning(false);
+  }
+
+  finishPlanning(): void {
+    if (!this.enabled) {
+      return;
+    }
+
+    this.#planningFilesDone = this.#planningFilesTotal;
+    this.#renderPlanning(true);
   }
 
   startFile(file: CopyProgressFile): void {
@@ -144,6 +186,39 @@ export class CopyProgress {
       },
     );
 
+    this.#writeFrame(frame);
+  }
+
+  #fileRate(now: number): number {
+    const elapsedSeconds = Math.max((now - this.#fileStartedAt) / 1000, 0.001);
+    return this.#fileBytesDone / elapsedSeconds;
+  }
+
+  #renderPlanning(force: boolean): void {
+    const now = this.#now();
+
+    if (!force && now - this.#lastRenderAt < 80) {
+      return;
+    }
+
+    this.#lastRenderAt = now;
+    this.#writeFrame(
+      renderPlanningFrame(
+        {
+          label: this.#planningLabel,
+          path: this.#planningPath,
+          filesDone: this.#planningFilesDone,
+          filesTotal: this.#planningFilesTotal,
+        },
+        {
+          color: this.#color,
+          columns: this.#stream.columns ?? 80,
+        },
+      ),
+    );
+  }
+
+  #writeFrame(frame: string): void {
     if (this.#live && this.#linesRendered > 0) {
       this.#stream.write(`\x1b[${this.#linesRendered}A`);
     }
@@ -151,19 +226,14 @@ export class CopyProgress {
     const lines = frame.split("\n");
 
     if (this.#live) {
-      for (const line of lines) {
-        this.#stream.write(`${ansi.clearLine}${line}\n`);
+      for (let index = 0; index < lines.length; index += 1) {
+        this.#stream.write(`${ansi.clearLine}${lines[index]}\n`);
       }
     } else {
       this.#stream.write(`${frame}\n`);
     }
 
     this.#linesRendered = lines.length;
-  }
-
-  #fileRate(now: number): number {
-    const elapsedSeconds = Math.max((now - this.#fileStartedAt) / 1000, 0.001);
-    return this.#fileBytesDone / elapsedSeconds;
   }
 }
 
@@ -197,6 +267,28 @@ export function renderProgressFrame(
       barWidth,
       color,
     )}  ${color.bold}${totalPercent}${color.reset}  ${color.dim}${count}${color.reset}`,
+  ].join("\n");
+}
+
+export function renderPlanningFrame(
+  snapshot: PlanningProgressSnapshot,
+  options: RenderProgressOptions,
+): string {
+  const color = colorSet(options.color);
+  const count = `${snapshot.filesDone.toLocaleString("en-US")} / ${snapshot.filesTotal.toLocaleString("en-US")} files`;
+  const barWidth = chooseBarWidth(options.columns, count.length, snapshot.label.length);
+  const path = snapshot.path === "" ? "..." : truncateLeft(snapshot.path, Math.max(12, options.columns - 4));
+
+  return [
+    `${color.bold}plan${color.reset}`,
+    `    ${color.dim}${count}${color.reset}  ${renderBar(
+      snapshot.filesDone,
+      snapshot.filesTotal,
+      barWidth,
+      color,
+    )}  ${color.bold}${formatPercent(snapshot.filesDone, snapshot.filesTotal)}${color.reset}  ${color.dim}${snapshot.label}${color.reset}`,
+    `  ${color.bold}current${color.reset}`,
+    `    ${color.dim}${path}${color.reset}`,
   ].join("\n");
 }
 

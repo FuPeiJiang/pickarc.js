@@ -21,10 +21,22 @@ describe("copy download plan", () => {
 
   test("builds bounded merged compressed range groups", async () => {
     const groups = await buildCopyGroups([
-      candidate("c.txt", "archive.zip", 300, "file", { offset: 300, length: 20 }),
-      candidate("a.txt", "archive.zip", 100, "file", { offset: 100, length: 50 }),
-      candidate("b.txt", "archive.zip", 160, "file", { offset: 160, length: 50 }),
-      candidate("huge.bin", "archive.zip", 1000, "file", { offset: 1000, length: 33 * 1024 * 1024 }),
+      candidate("c.txt", "archive.zip", 300, "file", {
+        offset: 300,
+        length: 20,
+      }),
+      candidate("a.txt", "archive.zip", 100, "file", {
+        offset: 100,
+        length: 50,
+      }),
+      candidate("b.txt", "archive.zip", 160, "file", {
+        offset: 160,
+        length: 50,
+      }),
+      candidate("huge.bin", "archive.zip", 1000, "file", {
+        offset: 1000,
+        length: 33 * 1024 * 1024,
+      }),
     ]);
 
     expect(

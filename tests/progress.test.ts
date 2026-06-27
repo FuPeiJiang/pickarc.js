@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { CopyProgress, formatBytes, renderProgressFrame } from "../src/progress.ts";
+import { CopyProgress, formatBytes, renderPlanningFrame, renderProgressFrame } from "../src/progress.ts";
 
 describe("progress rendering", () => {
   test("renders the selected ASCII bar layout without color", () => {
@@ -57,6 +57,56 @@ describe("progress rendering", () => {
     expect(formatBytes(375 * 1024 * 1024)).toBe("375 MiB");
     expect(formatBytes(18.2 * 1024 * 1024)).toBe("18.2 MiB");
     expect(formatBytes(900)).toBe("900 B");
+  });
+
+  test("renders planning progress with current path", () => {
+    const frame = renderPlanningFrame(
+      {
+        label: "resolving zip ranges",
+        path: "toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/linux/a.out.h",
+        filesDone: 3912,
+        filesTotal: 5959,
+      },
+      {
+        color: false,
+        columns: 80,
+      },
+    );
+
+    expect(frame).toContain("plan");
+    expect(frame).toContain("3,912 / 5,959 files");
+    expect(frame).toContain("resolving zip ranges");
+    expect(frame).toContain("current");
+    expect(frame).toContain("linux/a.out.h");
+  });
+
+  test("emits planning frames in forced progress mode", () => {
+    const writes: string[] = [];
+    const progress = new CopyProgress({
+      mode: "always",
+      stream: {
+        isTTY: false,
+        columns: 80,
+        write(data) {
+          writes.push(data);
+          return true;
+        },
+      },
+      now: () => 1000,
+    });
+
+    progress.startPlanning({
+      label: "resolving zip ranges",
+      filesTotal: 2,
+    });
+    progress.advancePlanning({
+      path: "a.txt",
+      filesDone: 1,
+    });
+    progress.finishPlanning();
+
+    expect(writes.join("")).toContain("resolving zip ranges");
+    expect(writes.join("")).toContain("a.txt");
   });
 
   test("auto mode is disabled for non-tty streams", () => {

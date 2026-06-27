@@ -65,54 +65,99 @@ export async function applyPathOperations(
   operations: readonly PathOperation[],
   expandAsDir?: ExpandAsDir,
 ): Promise<PathCandidate[]> {
-  let candidates = input.map((candidate) => ({ ...candidate }));
+  let candidates: PathCandidate[] = new Array(input.length);
+
+  for (let index = 0; index < input.length; index += 1) {
+    candidates[index] = { ...input[index]! };
+  }
 
   for (const operation of operations) {
     switch (operation.kind) {
-      case "include":
-        candidates = candidates.filter((candidate) => matchesAny(operation.matchers, candidate.path));
-        break;
+      case "include": {
+        const next: PathCandidate[] = [];
 
-      case "exclude":
-        candidates = candidates.filter((candidate) => !operation.matcher.matches(candidate.path));
-        break;
+        for (let index = 0; index < candidates.length; index += 1) {
+          const candidate = candidates[index]!;
 
-      case "replace":
-        candidates = candidates.map((candidate) => {
+          if (matchesAny(operation.matchers, candidate.path)) {
+            next.push(candidate);
+          }
+        }
+
+        candidates = next;
+        break;
+      }
+
+      case "exclude": {
+        const next: PathCandidate[] = [];
+
+        for (let index = 0; index < candidates.length; index += 1) {
+          const candidate = candidates[index]!;
+
+          if (!operation.matcher.matches(candidate.path)) {
+            next.push(candidate);
+          }
+        }
+
+        candidates = next;
+        break;
+      }
+
+      case "replace": {
+        const next: PathCandidate[] = new Array(candidates.length);
+
+        for (let index = 0; index < candidates.length; index += 1) {
+          const candidate = candidates[index]!;
           operation.regex.lastIndex = 0;
           const replaced = candidate.path.replace(operation.regex, operation.replacement);
           const normalized = normalizeVirtualPath(replaced, "--replace");
 
-          return {
+          next[index] = {
             ...candidate,
             path: normalized,
             absoluteFromReplace:
               candidate.absoluteFromReplace ||
               (normalized !== candidate.path && isAbsoluteLikePath(normalized)),
           };
-        });
-        break;
+        }
 
-      case "strip-components":
-        candidates = candidates.flatMap((candidate) => {
+        candidates = next;
+        break;
+      }
+
+      case "strip-components": {
+        const next: PathCandidate[] = [];
+
+        for (let index = 0; index < candidates.length; index += 1) {
+          const candidate = candidates[index]!;
           const stripped = stripLeadingComponents(candidate.path, operation.count);
-          return stripped === undefined
-            ? []
-            : [
-                {
-                  ...candidate,
-                  path: stripped,
-                },
-              ];
-        });
-        break;
 
-      case "flatten":
-        candidates = candidates.map((candidate) => ({
-          ...candidate,
-          path: basenameOfVirtualPath(candidate.path),
-        }));
+          if (stripped !== undefined) {
+            next.push({
+              ...candidate,
+              path: stripped,
+            });
+          }
+        }
+
+        candidates = next;
         break;
+      }
+
+      case "flatten": {
+        const next: PathCandidate[] = new Array(candidates.length);
+
+        for (let index = 0; index < candidates.length; index += 1) {
+          const candidate = candidates[index]!;
+          next[index] = {
+            ...candidate,
+            path: basenameOfVirtualPath(candidate.path),
+          };
+        }
+
+        candidates = next;
+        break;
+      }
 
       case "as-dir": {
         if (expandAsDir === undefined) {
@@ -121,7 +166,9 @@ export async function applyPathOperations(
 
         const next: PathCandidate[] = [];
 
-        for (const candidate of candidates) {
+        for (let index = 0; index < candidates.length; index += 1) {
+          const candidate = candidates[index]!;
+
           if (operation.matcher.matches(candidate.path)) {
             next.push(...(await expandAsDir(candidate, operation.keepExtension)));
           } else {
@@ -139,15 +186,18 @@ export async function applyPathOperations(
 }
 
 export function sortAndValidateFinalPaths(input: readonly PathCandidate[]): PathCandidate[] {
-  const candidates = input.map((candidate) => {
+  const candidates: PathCandidate[] = new Array(input.length);
+
+  for (let index = 0; index < input.length; index += 1) {
+    const candidate = input[index]!;
     const normalized = normalizeVirtualPath(candidate.path, "final path");
     assertUsableFinalPath(normalized, candidate.absoluteFromReplace);
 
-    return {
+    candidates[index] = {
       ...candidate,
       path: normalized,
     };
-  });
+  }
 
   candidates.sort((left, right) => {
     const byPath = left.path.localeCompare(right.path);

@@ -66,21 +66,50 @@ async function copy(
   progressMode: ParsedArgs["progress"],
   jobs: number,
 ): Promise<void> {
-  const files = candidates.filter((candidate) => candidate.kind === "file");
+  const files: PathCandidate[] = [];
+  const directories: PathCandidate[] = [];
+  let bytesTotal = 0;
+
+  for (let index = 0; index < candidates.length; index += 1) {
+    const candidate = candidates[index]!;
+
+    if (candidate.kind === "file") {
+      files.push(candidate);
+      bytesTotal += candidate.uncompressedSize;
+    } else {
+      directories.push(candidate);
+    }
+  }
+
   const progress = new CopyProgress({
     mode: progressMode,
   });
 
   progress.start({
     filesTotal: files.length,
-    bytesTotal: files.reduce((total, candidate) => total + candidate.uncompressedSize, 0),
+    bytesTotal,
   });
+  progress.startPlanning({
+    label: "resolving zip ranges",
+    filesTotal: files.length,
+  });
+  const groups = await buildCopyGroups(files, {
+    onFile: (file, index, total) => {
+      progress.advancePlanning({
+        path: file.path,
+        filesDone: Math.min(index + 1, total),
+      });
+    },
+  });
+  progress.finishPlanning();
 
-  for (const candidate of candidates.filter((candidate) => candidate.kind === "directory")) {
-    await createDirectory(candidate.path, lockdown);
+  for (let index = 0; index < directories.length; index += 1) {
+    await createDirectory(directories[index]!.path, lockdown);
   }
 
-  for (const group of await buildCopyGroups(files)) {
+  for (let groupIndex = 0; groupIndex < groups.length; groupIndex += 1) {
+    const group = groups[groupIndex]!;
+
     if (group.range !== undefined) {
       await group.files[0]!.primeRange(group.range.offset, group.range.length);
     }
@@ -98,32 +127,59 @@ async function copy(
 }
 
 export function planCopyOrder(candidates: readonly PathCandidate[]): PathCandidate[] {
-  const directories = candidates.filter((candidate) => candidate.kind === "directory");
-  const files = candidates
-    .filter((candidate) => candidate.kind === "file")
-    .toSorted((left, right) => {
-      const byArchive = left.archiveLabel.localeCompare(right.archiveLabel);
+  const directories: PathCandidate[] = [];
+  const files: PathCandidate[] = [];
 
-      if (byArchive !== 0) {
-        return byArchive;
-      }
+  for (let index = 0; index < candidates.length; index += 1) {
+    const candidate = candidates[index]!;
 
-      const leftOffset = left.physicalOffset ?? Number.MAX_SAFE_INTEGER;
-      const rightOffset = right.physicalOffset ?? Number.MAX_SAFE_INTEGER;
+    if (candidate.kind === "directory") {
+      directories.push(candidate);
+    } else {
+      files.push(candidate);
+    }
+  }
 
-      if (leftOffset !== rightOffset) {
-        return leftOffset - rightOffset;
-      }
+  files.sort((left, right) => {
+    const byArchive = left.archiveLabel.localeCompare(right.archiveLabel);
 
-      return left.path.localeCompare(right.path);
-    });
+    if (byArchive !== 0) {
+      return byArchive;
+    }
 
-  return [...directories, ...files];
+    const leftOffset = left.physicalOffset ?? Number.MAX_SAFE_INTEGER;
+    const rightOffset = right.physicalOffset ?? Number.MAX_SAFE_INTEGER;
+
+    if (leftOffset !== rightOffset) {
+      return leftOffset - rightOffset;
+    }
+
+    return left.path.localeCompare(right.path);
+  });
+
+  const planned: PathCandidate[] = new Array(directories.length + files.length);
+  let outputIndex = 0;
+
+  for (let index = 0; index < directories.length; index += 1) {
+    planned[outputIndex] = directories[index]!;
+    outputIndex += 1;
+  }
+
+  for (let index = 0; index < files.length; index += 1) {
+    planned[outputIndex] = files[index]!;
+    outputIndex += 1;
+  }
+
+  return planned;
 }
 
 export interface CopyGroup {
   files: PathCandidate[];
   range: { offset: number; length: number } | undefined;
+}
+
+export interface BuildCopyGroupsOptions {
+  onFile?: (file: PathCandidate, index: number, total: number) => void;
 }
 
 const maxPrimeGap = 64 * 1024;
@@ -198,8 +254,11 @@ async function runLimited<T>(
   }
 }
 
-export async function buildCopyGroups(files: readonly PathCandidate[]): Promise<CopyGroup[]> {
-  const planned = planCopyOrder(files).filter((candidate) => candidate.kind === "file");
+export async function buildCopyGroups(
+  files: readonly PathCandidate[],
+  options: BuildCopyGroupsOptions = {},
+): Promise<CopyGroup[]> {
+  const planned = planCopyOrder(files);
   const groups: CopyGroup[] = [];
   let current:
     | {
@@ -210,7 +269,14 @@ export async function buildCopyGroups(files: readonly PathCandidate[]): Promise<
       }
     | undefined;
 
-  for (const file of planned) {
+  for (let index = 0; index < planned.length; index += 1) {
+    const file = planned[index]!;
+
+    if (file.kind !== "file") {
+      continue;
+    }
+
+    options.onFile?.(file, index, planned.length);
     const range = await file.dataRange();
 
     if (range === undefined || range.length === 0 || range.length > maxPrimeRange) {
@@ -266,10 +332,15 @@ export async function buildCopyGroups(files: readonly PathCandidate[]): Promise<
 }
 
 function shouldCheckChecksum(path: string, ignoreChecksum: readonly RegExp[]): boolean {
-  return !ignoreChecksum.some((regex) => {
+  for (let index = 0; index < ignoreChecksum.length; index += 1) {
+    const regex = ignoreChecksum[index]!;
     regex.lastIndex = 0;
-    return regex.test(path);
-  });
+    if (regex.test(path)) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 async function writeStdout(data: Uint8Array): Promise<void> {
