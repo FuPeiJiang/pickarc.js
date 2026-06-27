@@ -102,6 +102,15 @@ describe("path pipeline", () => {
     );
   });
 
+  test("parses http transport options", () => {
+    expect(parseArgs(["ls", "--http", "http1", "archive.zip"]).httpTransport).toBe("http1");
+    expect(parseArgs(["ls", "--http", "http2", "archive.zip"]).httpTransport).toBe("http2");
+    expect(parseArgs(["ls", "archive.zip"]).httpTransport).toBe("fetch");
+    expect(() => parseArgs(["ls", "--http", "http3", "archive.zip"])).toThrow(
+      "expected fetch, http1, or http2",
+    );
+  });
+
   test("supports regex and glob OR groups for includes", async () => {
     const parsed = parseArgs([
       "ls",

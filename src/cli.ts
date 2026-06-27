@@ -35,6 +35,7 @@ Commands:
 
 Options:
   --proxy <url>
+  --http <fetch|http1|http2>
   --lockdown <path>
   --progress <auto|always|never>, --no-progress
   --ignore-checksum <regex>

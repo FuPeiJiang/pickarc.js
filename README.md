@@ -16,6 +16,7 @@ Implemented:
 
 - local `.zip` files
 - HTTP(S) ZIP files through range requests
+- explicit HTTP transport selection with `--http fetch`, `--http http1`, and `--http http2`
 - `ls`, `cat`, `cp`
 - stored and deflated ZIP entries
 - CRC32 checks by default
@@ -60,6 +61,23 @@ Regexes use JavaScript `RegExp` syntax. Replacements use JavaScript replacement 
 Globs use `Bun.Glob` and match normalized archive paths directly. `--include`, `--match`, `--matches`, `--include-glob`, `--match-glob`, and `--matches-glob` start a new include group. `--or` and `--or-glob` add alternatives to the immediately previous include group. Multiple include groups compose in command order, so they behave like ordered filters.
 
 Paths always use `/`. Rewrites normalize repeated slashes and `.` components. Any `..` component is refused.
+
+## HTTP Transport
+
+Remote archives use Bun `fetch` by default:
+
+```sh
+pickarc ls --http fetch https://example.com/archive.zip
+```
+
+Use explicit transports to compare behavior:
+
+```sh
+pickarc ls --http http1 https://example.com/archive.zip
+pickarc ls --http http2 https://example.com/archive.zip
+```
+
+`--http http1` uses a keep-alive HTTP/1.1 client. `--http http2` uses a reusable HTTP/2 session. `--proxy` is currently supported only with `--http fetch`.
 
 Example, copy only the Android NDK LLVM sysroot and Clang runtime/include trees while removing the top archive directory:
 

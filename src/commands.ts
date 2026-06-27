@@ -8,6 +8,7 @@ import { createDirectory, writeFileExclusiveStream } from "./safe-write.ts";
 export async function runCommand(options: ParsedArgs): Promise<void> {
   const archiveSet = await collectArchiveCandidates(options.archives, {
     proxy: options.proxy,
+    httpTransport: options.httpTransport,
   });
 
   try {

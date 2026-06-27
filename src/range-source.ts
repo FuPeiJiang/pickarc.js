@@ -1,6 +1,11 @@
+import http from "node:http";
+import http2 from "node:http2";
+import https from "node:https";
 import { open, stat } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { fail } from "./errors.ts";
+
+export type HttpTransport = "fetch" | "http1" | "http2";
 
 export interface RangeSource {
   readonly label: string;
@@ -11,6 +16,7 @@ export interface RangeSource {
 
 export interface OpenSourceOptions {
   proxy: string | undefined;
+  httpTransport: HttpTransport;
 }
 
 export async function openRangeSource(
@@ -18,7 +24,20 @@ export async function openRangeSource(
   options: OpenSourceOptions,
 ): Promise<RangeSource> {
   if (/^https?:\/\//i.test(input)) {
-    return new HttpRangeSource(input, options.proxy);
+    if (options.proxy !== undefined && options.httpTransport !== "fetch") {
+      fail(`--proxy is currently supported only with --http fetch`);
+    }
+
+    switch (options.httpTransport) {
+      case "fetch":
+        return new HttpRangeSource(input, options.proxy);
+
+      case "http1":
+        return new Http1RangeSource(input);
+
+      case "http2":
+        return new Http2RangeSource(input);
+    }
   }
 
   return FileRangeSource.open(input);
@@ -86,16 +105,23 @@ export class FileRangeSource implements RangeSource {
   }
 }
 
-export class HttpRangeSource implements RangeSource {
+interface HttpRequestOptions {
+  method?: "HEAD" | "GET";
+  headers?: Record<string, string>;
+}
+
+interface HttpRangeResponse {
+  status: number;
+  headers: Headers;
+  body(): Promise<Uint8Array>;
+}
+
+abstract class BaseHttpRangeSource implements RangeSource {
   readonly label: string;
-  readonly #url: string;
-  readonly #proxy: string | undefined;
   #size: number | undefined;
 
-  constructor(url: string, proxy: string | undefined) {
-    this.#url = url;
-    this.#proxy = proxy;
-    this.label = url;
+  constructor(label: string) {
+    this.label = label;
   }
 
   async size(): Promise<number> {
@@ -103,15 +129,15 @@ export class HttpRangeSource implements RangeSource {
       return this.#size;
     }
 
-    const head = await this.fetch({ method: "HEAD" });
+    const head = await this.request({ method: "HEAD" });
     const contentLength = head.headers.get("content-length");
 
-    if (head.ok && contentLength !== null) {
+    if (head.status >= 200 && head.status < 300 && contentLength !== null) {
       this.#size = parseContentLength(contentLength, this.label);
       return this.#size;
     }
 
-    const probe = await this.fetch({
+    const probe = await this.request({
       headers: {
         range: "bytes=0-0",
       },
@@ -129,7 +155,7 @@ export class HttpRangeSource implements RangeSource {
     }
 
     this.#size = parseContentLength(match[1]!, this.label);
-    await probe.arrayBuffer();
+    await probe.body();
     return this.#size;
   }
 
@@ -141,14 +167,14 @@ export class HttpRangeSource implements RangeSource {
       return new Uint8Array();
     }
 
-    const response = await this.fetch({
+    const response = await this.request({
       headers: {
         range: `bytes=${offset}-${offset + length - 1}`,
       },
     });
 
     if (response.status === 206) {
-      const bytes = new Uint8Array(await response.arrayBuffer());
+      const bytes = await response.body();
 
       if (bytes.byteLength !== length) {
         fail(`${this.label}: short HTTP range read at offset ${offset}`);
@@ -158,7 +184,7 @@ export class HttpRangeSource implements RangeSource {
     }
 
     if (response.status === 200 && offset === 0 && length === size) {
-      const bytes = new Uint8Array(await response.arrayBuffer());
+      const bytes = await response.body();
 
       if (bytes.byteLength !== length) {
         fail(`${this.label}: short HTTP read`);
@@ -170,24 +196,265 @@ export class HttpRangeSource implements RangeSource {
     fail(`${this.label}: server does not support required HTTP range request`);
   }
 
-  private async fetch(init: RequestInit): Promise<Response> {
-    const headers = new Headers(init.headers);
+  protected abstract request(options: HttpRequestOptions): Promise<HttpRangeResponse>;
+}
+
+export class HttpRangeSource extends BaseHttpRangeSource {
+  readonly label: string;
+  readonly #url: string;
+  readonly #proxy: string | undefined;
+
+  constructor(url: string, proxy: string | undefined) {
+    super(url);
+    this.#url = url;
+    this.#proxy = proxy;
+    this.label = url;
+  }
+
+  protected async request(options: HttpRequestOptions): Promise<HttpRangeResponse> {
+    const headers = new Headers(options.headers);
 
     if (!headers.has("accept-encoding")) {
       headers.set("accept-encoding", "identity");
     }
 
     const requestInit: RequestInit = {
-      ...init,
       headers,
       redirect: "follow",
     };
+
+    if (options.method !== undefined) {
+      requestInit.method = options.method;
+    }
 
     if (this.#proxy !== undefined) {
       Object.assign(requestInit, { proxy: this.#proxy });
     }
 
-    return fetch(this.#url, requestInit);
+    const response = await fetch(this.#url, requestInit);
+
+    return {
+      status: response.status,
+      headers: response.headers,
+      body: async () => new Uint8Array(await response.arrayBuffer()),
+    };
+  }
+}
+
+export class Http1RangeSource extends BaseHttpRangeSource {
+  readonly #agent: http.Agent | https.Agent;
+  #url: URL;
+
+  constructor(url: string) {
+    super(url);
+    this.#url = new URL(url);
+    this.#agent =
+      this.#url.protocol === "https:"
+        ? new https.Agent({
+            keepAlive: true,
+            ALPNProtocols: ["http/1.1"],
+          })
+        : new http.Agent({ keepAlive: true });
+  }
+
+  protected async request(options: HttpRequestOptions): Promise<HttpRangeResponse> {
+    return this.nodeRequest(options, 0);
+  }
+
+  async close(): Promise<void> {
+    this.#agent.destroy();
+  }
+
+  private async nodeRequest(
+    options: HttpRequestOptions,
+    redirects: number,
+  ): Promise<HttpRangeResponse> {
+    if (redirects > 5) {
+      fail(`${this.label}: too many HTTP redirects`);
+    }
+
+    const headers = headersObject(options.headers);
+    const request = this.#url.protocol === "https:" ? https.request : http.request;
+
+    return new Promise<HttpRangeResponse>((resolve, reject) => {
+      const req = request(
+        this.#url,
+        {
+          method: options.method ?? "GET",
+          headers,
+          agent: this.#agent,
+        },
+        (res) => {
+          const status = res.statusCode ?? 0;
+          const location = res.headers.location;
+
+          if (isRedirect(status) && location !== undefined) {
+            res.resume();
+            this.#url = new URL(Array.isArray(location) ? location[0]! : location, this.#url);
+            resolve(this.nodeRequest(options, redirects + 1));
+            return;
+          }
+
+          resolve({
+            status,
+            headers: incomingHeadersToHeaders(res.headers),
+            body: async () => {
+              const chunks: Uint8Array[] = [];
+              let total = 0;
+
+              for await (const chunk of res) {
+                const bytes = asUint8Array(chunk);
+                chunks.push(bytes);
+                total += bytes.byteLength;
+              }
+
+              return concat(chunks, total);
+            },
+          });
+        },
+      );
+
+      req.on("error", reject);
+      req.end();
+    });
+  }
+}
+
+export class Http2RangeSource extends BaseHttpRangeSource {
+  #url: URL;
+  #session: http2.ClientHttp2Session | undefined;
+  #origin = "";
+
+  constructor(url: string) {
+    super(url);
+    this.#url = new URL(url);
+  }
+
+  protected async request(options: HttpRequestOptions): Promise<HttpRangeResponse> {
+    return this.http2Request(options, 0);
+  }
+
+  async close(): Promise<void> {
+    await this.closeSession();
+  }
+
+  private async http2Request(
+    options: HttpRequestOptions,
+    redirects: number,
+  ): Promise<HttpRangeResponse> {
+    if (redirects > 5) {
+      fail(`${this.label}: too many HTTP redirects`);
+    }
+
+    const session = await this.session();
+    const headers: http2.OutgoingHttpHeaders = {
+      ":method": options.method ?? "GET",
+      ":path": `${this.#url.pathname}${this.#url.search}`,
+      ...headersObject(options.headers),
+    };
+
+    return new Promise<HttpRangeResponse>((resolve, reject) => {
+      const req = session.request(headers);
+      const chunks: Uint8Array[] = [];
+      let total = 0;
+      let responseHeaders: http2.IncomingHttpHeaders | undefined;
+
+      req.on("response", (headers) => {
+        responseHeaders = headers;
+      });
+
+      req.on("data", (chunk) => {
+        const bytes = asUint8Array(chunk);
+        chunks.push(bytes);
+        total += bytes.byteLength;
+      });
+
+      req.on("error", reject);
+
+      req.on("end", () => {
+        const headers = responseHeaders;
+
+        if (headers === undefined) {
+          reject(new Error(`${this.label}: missing HTTP/2 response headers`));
+          return;
+        }
+
+        const status = Number(headers[":status"] ?? 0);
+        const location = headers.location;
+
+        if (isRedirect(status) && location !== undefined) {
+          const target = Array.isArray(location) ? location[0] : location;
+
+          if (target === undefined) {
+            reject(new Error(`${this.label}: invalid redirect location`));
+            return;
+          }
+
+          this.#url = new URL(target, this.#url);
+          this.closeSession()
+            .then(() => this.http2Request(options, redirects + 1))
+            .then(resolve, reject);
+          return;
+        }
+
+        const body = concat(chunks, total);
+        resolve({
+          status,
+          headers: incomingHeadersToHeaders(headers),
+          body: async () => body,
+        });
+      });
+
+      req.end();
+    });
+  }
+
+  private async session(): Promise<http2.ClientHttp2Session> {
+    const origin = this.#url.origin;
+
+    if (this.#session !== undefined && !this.#session.closed && !this.#session.destroyed && this.#origin === origin) {
+      return this.#session;
+    }
+
+    await this.closeSession();
+    this.#origin = origin;
+
+    this.#session = http2.connect(origin);
+    this.#session.on("error", () => undefined);
+
+    await new Promise<void>((resolve, reject) => {
+      const session = this.#session!;
+      const onConnect = (): void => {
+        cleanup();
+        resolve();
+      };
+      const onError = (error: Error): void => {
+        cleanup();
+        reject(error);
+      };
+      const cleanup = (): void => {
+        session.off("connect", onConnect);
+        session.off("error", onError);
+      };
+
+      session.once("connect", onConnect);
+      session.once("error", onError);
+    });
+
+    return this.#session;
+  }
+
+  private async closeSession(): Promise<void> {
+    const session = this.#session;
+    this.#session = undefined;
+
+    if (session === undefined || session.closed || session.destroyed) {
+      return;
+    }
+
+    await new Promise<void>((resolve) => {
+      session.close(() => resolve());
+    });
   }
 }
 
@@ -213,4 +480,65 @@ function parseContentLength(value: string, label: string): number {
   }
 
   return size;
+}
+
+function headersObject(headers: Record<string, string> | undefined): Record<string, string> {
+  return {
+    "accept-encoding": "identity",
+    ...headers,
+  };
+}
+
+function incomingHeadersToHeaders(
+  input: http.IncomingHttpHeaders | http2.IncomingHttpHeaders,
+): Headers {
+  const headers = new Headers();
+
+  for (const [key, value] of Object.entries(input)) {
+    if (key.startsWith(":") || value === undefined) {
+      continue;
+    }
+
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        headers.append(key, item);
+      }
+    } else {
+      headers.set(key, String(value));
+    }
+  }
+
+  return headers;
+}
+
+function isRedirect(status: number): boolean {
+  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+}
+
+function asUint8Array(value: unknown): Uint8Array {
+  if (value instanceof Uint8Array) {
+    return value;
+  }
+
+  if (value instanceof ArrayBuffer) {
+    return new Uint8Array(value);
+  }
+
+  if (typeof value === "string") {
+    return new TextEncoder().encode(value);
+  }
+
+  fail(`HTTP response produced an unsupported chunk`);
+}
+
+function concat(chunks: readonly Uint8Array[], total: number): Uint8Array {
+  const output = new Uint8Array(total);
+  let offset = 0;
+
+  for (const chunk of chunks) {
+    output.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  return output;
 }
