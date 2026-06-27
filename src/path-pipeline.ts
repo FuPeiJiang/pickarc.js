@@ -54,6 +54,7 @@ export interface PathCandidate {
   planRange: () => { offset: number; length: number } | undefined;
   dataRange: () => Promise<{ offset: number; length: number } | undefined>;
   primeRange: (offset: number, length: number) => Promise<void>;
+  expandAsDirectory?: (candidate: PathCandidate, keepExtension: boolean) => Promise<PathCandidate[]>;
 }
 
 export type ExpandAsDir = (

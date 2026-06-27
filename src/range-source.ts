@@ -63,6 +63,34 @@ export class BufferRangeSource implements RangeSource {
   }
 }
 
+export class SubRangeSource implements RangeSource {
+  readonly label: string;
+  readonly #source: RangeSource;
+  readonly #offset: number;
+  readonly #size: number;
+
+  constructor(source: RangeSource, offset: number, size: number, label: string) {
+    this.#source = source;
+    this.#offset = offset;
+    this.#size = size;
+    this.label = label;
+  }
+
+  async size(): Promise<number> {
+    return this.#size;
+  }
+
+  async read(offset: number, length: number): Promise<Uint8Array> {
+    assertRange(offset, length, this.#size, this.label);
+    return this.#source.read(this.#offset + offset, length);
+  }
+
+  async prime(offset: number, length: number): Promise<void> {
+    assertRange(offset, length, this.#size, this.label);
+    await this.#source.prime?.(this.#offset + offset, length);
+  }
+}
+
 interface CacheWindow {
   offset: number;
   bytes: Uint8Array;

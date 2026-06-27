@@ -2,7 +2,7 @@ import { Readable } from "node:stream";
 import { createInflateRaw, inflateRawSync } from "node:zlib";
 import { Crc32 } from "./crc32.ts";
 import { fail } from "./errors.ts";
-import { BufferRangeSource, type RangeSource } from "./range-source.ts";
+import { BufferRangeSource, SubRangeSource, type RangeSource } from "./range-source.ts";
 import { normalizeArchivePath } from "./path-utils.ts";
 
 const eocdSignature = 0x06054b50;
@@ -268,6 +268,19 @@ export class ZipArchive {
 
   async primeRange(offset: number, length: number): Promise<void> {
     await this.#source.prime?.(offset, length);
+  }
+
+  async openStoredEntryAsArchive(entry: ZipEntry, label: string): Promise<ZipArchive> {
+    if ((entry.flags & 1) !== 0) {
+      fail(`${entry.path}: encrypted ZIP entries are not supported`);
+    }
+
+    if (entry.compressionMethod !== 0) {
+      fail(`${entry.path}: --as-dir requires ZIP compression method 0 (stored)`);
+    }
+
+    const { offset } = await this.entryDataRange(entry);
+    return new ZipArchive(new SubRangeSource(this.#source, offset, entry.compressedSize, label), label);
   }
 
   private async readCentralDirectoryInfo(): Promise<CentralDirectoryInfo> {

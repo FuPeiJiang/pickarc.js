@@ -6,6 +6,7 @@ import {
   Http2RangeSource,
   HttpRangeSource,
   ReadAheadRangeSource,
+  SubRangeSource,
   type RangeSource,
 } from "../src/range-source.ts";
 
@@ -107,6 +108,19 @@ describe("HttpRangeSource", () => {
       { offset: 4, length: 4 },
     ]);
   });
+
+  test("maps sub-range reads and primes to the parent source", async () => {
+    const source = new CountingRangeSource(new Uint8Array([1, 2, 3, 4, 5, 6]));
+    const nested = new SubRangeSource(source, 2, 3, "nested");
+
+    expect(await nested.size()).toBe(3);
+    expect(Array.from(await nested.read(1, 2))).toEqual([4, 5]);
+    await nested.prime(0, 1);
+    expect(source.reads).toEqual([
+      { offset: 3, length: 2 },
+      { offset: 2, length: 1 },
+    ]);
+  });
 });
 
 class CountingRangeSource implements RangeSource {
@@ -125,6 +139,10 @@ class CountingRangeSource implements RangeSource {
   async read(offset: number, length: number): Promise<Uint8Array> {
     this.reads.push({ offset, length });
     return this.#bytes.slice(offset, offset + length);
+  }
+
+  async prime(offset: number, length: number): Promise<void> {
+    this.reads.push({ offset, length });
   }
 }
 

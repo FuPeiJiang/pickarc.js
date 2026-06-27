@@ -47,28 +47,11 @@ export async function expandStoredZipAsDirectory(
   candidate: PathCandidate,
   keepExtension: boolean,
 ): Promise<PathCandidate[]> {
-  if (candidate.kind !== "file") {
-    fail(`${candidate.path}: --as-dir matched a directory`);
+  if (candidate.expandAsDirectory === undefined) {
+    fail(`${candidate.path}: --as-dir is unavailable for this entry`);
   }
 
-  if (candidate.compressionMethod !== 0) {
-    fail(`${candidate.path}: --as-dir requires ZIP compression method 0 (stored)`);
-  }
-
-  const bytes = await candidate.readData({ checkCrc: true });
-  const archive = ZipArchive.fromBuffer(bytes, `${candidate.archiveLabel}!${candidate.path}`);
-  const entries = await archive.entries();
-  const prefix = keepExtension ? candidate.path : stripLastExtension(candidate.path);
-
-  return entries.map((entry) =>
-    candidateFromZipEntry(
-      archive,
-      entry,
-      joinVirtualPath(prefix, entry.path),
-      `${candidate.sourcePath}!${entry.path}`,
-      candidate.absoluteFromReplace,
-    ),
-  );
+  return candidate.expandAsDirectory(candidate, keepExtension);
 }
 
 function candidateFromZipEntry(
@@ -95,7 +78,41 @@ function candidateFromZipEntry(
     planRange: () => archive.entryPlannedRange(entry),
     dataRange: () => archive.entryDataRange(entry),
     primeRange: (offset, length) => archive.primeRange(offset, length),
+    expandAsDirectory: (candidate, keepExtension) =>
+      expandZipEntryAsDirectory(archive, entry, candidate, keepExtension),
   };
+}
+
+async function expandZipEntryAsDirectory(
+  archive: ZipArchive,
+  entry: ZipEntry,
+  candidate: PathCandidate,
+  keepExtension: boolean,
+): Promise<PathCandidate[]> {
+  if (candidate.kind !== "file") {
+    fail(`${candidate.path}: --as-dir matched a directory`);
+  }
+
+  if (candidate.compressionMethod !== 0) {
+    fail(`${candidate.path}: --as-dir requires ZIP compression method 0 (stored)`);
+  }
+
+  const nestedArchive = await archive.openStoredEntryAsArchive(
+    entry,
+    `${candidate.archiveLabel}!${candidate.path}`,
+  );
+  const entries = await nestedArchive.entries();
+  const prefix = keepExtension ? candidate.path : stripLastExtension(candidate.path);
+
+  return entries.map((nestedEntry) =>
+    candidateFromZipEntry(
+      nestedArchive,
+      nestedEntry,
+      joinVirtualPath(prefix, nestedEntry.path),
+      `${candidate.sourcePath}!${nestedEntry.path}`,
+      candidate.absoluteFromReplace,
+    ),
+  );
 }
 
 async function closeAll(sources: readonly RangeSource[]): Promise<void> {
