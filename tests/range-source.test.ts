@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import http from "node:http";
 import http2 from "node:http2";
-import { Http1RangeSource, Http2RangeSource, HttpRangeSource } from "../src/range-source.ts";
+import {
+  Http1RangeSource,
+  Http2RangeSource,
+  HttpRangeSource,
+  ReadAheadRangeSource,
+  type RangeSource,
+} from "../src/range-source.ts";
 
 const originalFetch = globalThis.fetch;
 const servers: Array<{ close(callback: () => void): void }> = [];
@@ -71,7 +77,38 @@ describe("HttpRangeSource", () => {
       await source.close();
     }
   });
+
+  test("serves nearby ranges from one read-ahead window", async () => {
+    const source = new CountingRangeSource(new Uint8Array([1, 2, 3, 4, 5, 6]));
+    const cached = new ReadAheadRangeSource(source, {
+      windowSize: 4,
+      maxWindows: 2,
+    });
+
+    expect(Array.from(await cached.read(1, 1))).toEqual([2]);
+    expect(Array.from(await cached.read(2, 2))).toEqual([3, 4]);
+    expect(source.reads).toEqual([{ offset: 1, length: 4 }]);
+  });
 });
+
+class CountingRangeSource implements RangeSource {
+  readonly label = "counting";
+  readonly reads: Array<{ offset: number; length: number }> = [];
+  readonly #bytes: Uint8Array;
+
+  constructor(bytes: Uint8Array) {
+    this.#bytes = bytes;
+  }
+
+  async size(): Promise<number> {
+    return this.#bytes.byteLength;
+  }
+
+  async read(offset: number, length: number): Promise<Uint8Array> {
+    this.reads.push({ offset, length });
+    return this.#bytes.slice(offset, offset + length);
+  }
+}
 
 async function startHttp1RangeServer(data: Uint8Array): Promise<string> {
   const server = http.createServer((request, response) => {

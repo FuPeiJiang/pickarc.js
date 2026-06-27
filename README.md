@@ -116,6 +116,8 @@ pickarc cp archive.zip \
 
 `cp` writes files with exclusive create flags and `O_NOFOLLOW`, mode `0600`, and refuses to overwrite existing files. Existing symlinked parent directories are rejected during directory creation/walk checks.
 
+For remote ZIPs, `cp` validates final paths first, then downloads files in physical archive order. HTTP sources use a bounded read-ahead range cache so adjacent small files can be served from larger range reads instead of many tiny requests.
+
 `cp` shows progress on `stderr` when running in an interactive terminal. Control it with:
 
 ```sh

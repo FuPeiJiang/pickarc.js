@@ -30,13 +30,13 @@ export async function openRangeSource(
 
     switch (options.httpTransport) {
       case "fetch":
-        return new HttpRangeSource(input, options.proxy);
+        return new ReadAheadRangeSource(new HttpRangeSource(input, options.proxy));
 
       case "http1":
-        return new Http1RangeSource(input);
+        return new ReadAheadRangeSource(new Http1RangeSource(input));
 
       case "http2":
-        return new Http2RangeSource(input);
+        return new ReadAheadRangeSource(new Http2RangeSource(input));
     }
   }
 
@@ -59,6 +59,93 @@ export class BufferRangeSource implements RangeSource {
   async read(offset: number, length: number): Promise<Uint8Array> {
     assertRange(offset, length, this.#bytes.byteLength, this.label);
     return this.#bytes.slice(offset, offset + length);
+  }
+}
+
+interface CacheWindow {
+  offset: number;
+  bytes: Uint8Array;
+  lastUsed: number;
+}
+
+export class ReadAheadRangeSource implements RangeSource {
+  readonly label: string;
+  readonly #source: RangeSource;
+  readonly #windowSize: number;
+  readonly #maxWindows: number;
+  #windows: CacheWindow[] = [];
+  #clock = 0;
+
+  constructor(source: RangeSource, options?: { windowSize?: number; maxWindows?: number }) {
+    this.#source = source;
+    this.label = source.label;
+    this.#windowSize = options?.windowSize ?? 4 * 1024 * 1024;
+    this.#maxWindows = options?.maxWindows ?? 4;
+  }
+
+  async size(): Promise<number> {
+    return this.#source.size();
+  }
+
+  async read(offset: number, length: number): Promise<Uint8Array> {
+    const size = await this.size();
+    assertRange(offset, length, size, this.label);
+
+    if (length === 0) {
+      return new Uint8Array();
+    }
+
+    const cached = this.findWindow(offset, length);
+
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    if (length > this.#windowSize) {
+      return this.#source.read(offset, length);
+    }
+
+    const readLength = Math.min(this.#windowSize, size - offset);
+    const bytes = await this.#source.read(offset, readLength);
+    this.addWindow(offset, bytes);
+    return bytes.slice(0, length);
+  }
+
+  async close(): Promise<void> {
+    await this.#source.close?.();
+  }
+
+  private findWindow(offset: number, length: number): Uint8Array | undefined {
+    for (const window of this.#windows) {
+      const start = offset - window.offset;
+
+      if (start >= 0 && start + length <= window.bytes.byteLength) {
+        window.lastUsed = ++this.#clock;
+        return window.bytes.slice(start, start + length);
+      }
+    }
+
+    return undefined;
+  }
+
+  private addWindow(offset: number, bytes: Uint8Array): void {
+    this.#windows.push({
+      offset,
+      bytes,
+      lastUsed: ++this.#clock,
+    });
+
+    while (this.#windows.length > this.#maxWindows) {
+      let oldestIndex = 0;
+
+      for (let index = 1; index < this.#windows.length; index += 1) {
+        if (this.#windows[index]!.lastUsed < this.#windows[oldestIndex]!.lastUsed) {
+          oldestIndex = index;
+        }
+      }
+
+      this.#windows.splice(oldestIndex, 1);
+    }
   }
 }
 

@@ -45,7 +45,9 @@ async function list(candidates: readonly PathCandidate[]): Promise<void> {
 }
 
 async function cat(candidates: readonly PathCandidate[], ignoreChecksum: readonly RegExp[]): Promise<void> {
-  for (const candidate of candidates) {
+  const plan = planCopyOrder(candidates);
+
+  for (const candidate of plan) {
     if (candidate.kind === "directory") {
       fail(`${candidate.path}: cannot cat a directory`);
     }
@@ -103,6 +105,30 @@ async function copy(
   }
 
   progress.finish();
+}
+
+export function planCopyOrder(candidates: readonly PathCandidate[]): PathCandidate[] {
+  const directories = candidates.filter((candidate) => candidate.kind === "directory");
+  const files = candidates
+    .filter((candidate) => candidate.kind === "file")
+    .toSorted((left, right) => {
+      const byArchive = left.archiveLabel.localeCompare(right.archiveLabel);
+
+      if (byArchive !== 0) {
+        return byArchive;
+      }
+
+      const leftOffset = left.physicalOffset ?? Number.MAX_SAFE_INTEGER;
+      const rightOffset = right.physicalOffset ?? Number.MAX_SAFE_INTEGER;
+
+      if (leftOffset !== rightOffset) {
+        return leftOffset - rightOffset;
+      }
+
+      return left.path.localeCompare(right.path);
+    });
+
+  return [...directories, ...files];
 }
 
 function shouldCheckChecksum(path: string, ignoreChecksum: readonly RegExp[]): boolean {

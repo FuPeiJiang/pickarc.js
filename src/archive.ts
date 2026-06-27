@@ -86,6 +86,7 @@ function candidateFromZipEntry(
     kind: entry.kind,
     compressionMethod: entry.compressionMethod,
     uncompressedSize: entry.uncompressedSize,
+    physicalOffset: entry.localHeaderOffset,
     absoluteFromReplace,
     isSymlink: entry.isSymlink,
     readData: (options) => archive.readEntry(entry, options),

@@ -231,6 +231,7 @@ function candidate(path: string): PathCandidate {
     kind: "file",
     compressionMethod: 0,
     uncompressedSize: 0,
+    physicalOffset: undefined,
     absoluteFromReplace: false,
     isSymlink: false,
     readData: async (_options) => {

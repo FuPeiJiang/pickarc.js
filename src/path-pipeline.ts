@@ -45,6 +45,7 @@ export interface PathCandidate {
   kind: "file" | "directory";
   compressionMethod: number | undefined;
   uncompressedSize: number;
+  physicalOffset: number | undefined;
   absoluteFromReplace: boolean;
   isSymlink: boolean;
   readData: (options: { checkCrc: boolean }) => Promise<Uint8Array>;
