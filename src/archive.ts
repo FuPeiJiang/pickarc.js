@@ -92,6 +92,7 @@ function candidateFromZipEntry(
     isSymlink: entry.isSymlink,
     readData: (options) => archive.readEntry(entry, options),
     streamData: (options) => archive.streamEntry(entry, options),
+    planRange: () => archive.entryPlannedRange(entry),
     dataRange: () => archive.entryDataRange(entry),
     primeRange: (offset, length) => archive.primeRange(offset, length),
   };

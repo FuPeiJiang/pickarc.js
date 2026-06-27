@@ -277,7 +277,7 @@ export async function buildCopyGroups(
     }
 
     options.onFile?.(file, index, planned.length);
-    const range = await file.dataRange();
+    const range = file.planRange();
 
     if (range === undefined || range.length === 0 || range.length > maxPrimeRange) {
       flush();

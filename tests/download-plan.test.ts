@@ -58,6 +58,28 @@ describe("copy download plan", () => {
       },
     ]);
   });
+
+  test("builds groups without resolving exact data ranges", async () => {
+    let exactReads = 0;
+
+    await buildCopyGroups([
+      candidate(
+        "a.txt",
+        "archive.zip",
+        100,
+        "file",
+        {
+          offset: 100,
+          length: 50,
+        },
+        () => {
+          exactReads += 1;
+        },
+      ),
+    ]);
+
+    expect(exactReads).toBe(0);
+  });
 });
 
 function candidate(
@@ -65,7 +87,8 @@ function candidate(
   archiveLabel: string,
   physicalOffset: number | undefined,
   kind: "file" | "directory" = "file",
-  dataRange?: { offset: number; length: number },
+  planRange?: { offset: number; length: number },
+  onExactDataRange?: () => void,
 ): PathCandidate {
   return {
     id: `${archiveLabel}:${path}`,
@@ -83,7 +106,11 @@ function candidate(
     streamData: async function* () {
       yield new Uint8Array();
     },
-    dataRange: async () => dataRange,
+    planRange: () => planRange,
+    dataRange: async () => {
+      onExactDataRange?.();
+      return planRange;
+    },
     primeRange: async () => {},
   };
 }

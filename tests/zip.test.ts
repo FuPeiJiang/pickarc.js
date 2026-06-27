@@ -43,6 +43,23 @@ describe("ZipArchive", () => {
     );
   });
 
+  test("plans read-ahead ranges from central directory estimates", async () => {
+    const archive = ZipArchive.fromBuffer(
+      makeZip([{ path: "file.txt", data: "abc" }]),
+      "fixture.zip",
+    );
+    const [entry] = await archive.entries();
+
+    expect(archive.entryPlannedRange(entry!)).toEqual({
+      offset: 0,
+      length: 30 + "file.txt".length + "abc".length,
+    });
+    expect(await archive.entryDataRange(entry!)).toEqual({
+      offset: 30 + "file.txt".length,
+      length: "abc".length,
+    });
+  });
+
   test("streams stored and deflated entry data in chunks", async () => {
     const archive = ZipArchive.fromBuffer(
       makeZip([

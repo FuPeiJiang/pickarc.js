@@ -51,6 +51,7 @@ export interface PathCandidate {
   isSymlink: boolean;
   readData: (options: { checkCrc: boolean }) => Promise<Uint8Array>;
   streamData: (options: { checkCrc: boolean }) => AsyncIterable<Uint8Array>;
+  planRange: () => { offset: number; length: number } | undefined;
   dataRange: () => Promise<{ offset: number; length: number } | undefined>;
   primeRange: (offset: number, length: number) => Promise<void>;
 }

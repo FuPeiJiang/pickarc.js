@@ -249,6 +249,7 @@ function candidate(path: string): PathCandidate {
     streamData: async function* (_options) {
       throw new Error("content should not be read");
     },
+    planRange: () => undefined,
     dataRange: async () => undefined,
     primeRange: async (_offset, _length) => {},
   };

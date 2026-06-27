@@ -25,6 +25,8 @@ export interface ZipEntry {
   readonly compressedSize: number;
   readonly uncompressedSize: number;
   readonly localHeaderOffset: number;
+  readonly centralNameLength: number;
+  readonly centralExtraLength: number;
   readonly externalAttributes: number;
   readonly kind: "file" | "directory";
   readonly isSymlink: boolean;
@@ -53,7 +55,7 @@ export class ZipArchive {
   readonly label: string;
   readonly #source: RangeSource;
   #entries: ZipEntry[] | undefined;
-  #dataOffsets = new Map<number, number>();
+  #dataOffsets: number[] = [];
 
   constructor(source: RangeSource, label = source.label) {
     this.#source = source;
@@ -134,6 +136,8 @@ export class ZipArchive {
         compressedSize,
         uncompressedSize,
         localHeaderOffset,
+        centralNameLength: nameLength,
+        centralExtraLength: extraLength,
         externalAttributes,
         kind,
         isSymlink,
@@ -254,6 +258,14 @@ export class ZipArchive {
     };
   }
 
+  entryPlannedRange(entry: ZipEntry): ZipEntryDataRange {
+    // Used only for read-ahead planning; extraction still parses the local header.
+    return {
+      offset: entry.localHeaderOffset,
+      length: 30 + entry.centralNameLength + entry.centralExtraLength + entry.compressedSize,
+    };
+  }
+
   async primeRange(offset: number, length: number): Promise<void> {
     await this.#source.prime?.(offset, length);
   }
@@ -342,7 +354,7 @@ export class ZipArchive {
   }
 
   private async readDataOffset(entry: ZipEntry): Promise<number> {
-    const cached = this.#dataOffsets.get(entry.index);
+    const cached = this.#dataOffsets[entry.index];
 
     if (cached !== undefined) {
       return cached;
@@ -358,7 +370,7 @@ export class ZipArchive {
     const nameLength = view.getUint16(26, true);
     const extraLength = view.getUint16(28, true);
     const offset = entry.localHeaderOffset + 30 + nameLength + extraLength;
-    this.#dataOffsets.set(entry.index, offset);
+    this.#dataOffsets[entry.index] = offset;
     return offset;
   }
 
