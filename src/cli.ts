@@ -32,6 +32,18 @@ Commands:
   ls    List final paths after rewrite/filter rules
   cat   Write selected file contents to stdout
   cp    Copy selected files to their final paths
+
+Options:
+  --proxy <url>
+  --lockdown <path>
+  --ignore-checksum <regex>
+  --include <regex>, --matches <regex>
+  --exclude <regex>
+  --replace <regex> <replacement>
+  --strip-components <n>, --cut-prefix <n>
+  --flatten
+  --as-dir <regex>, --archive-is-dir <regex>
+  --as-dir-keep-ext <regex>, --archive-is-dir-keep-ext <regex>
 `);
 }
 
