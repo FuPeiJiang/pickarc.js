@@ -3,6 +3,7 @@ import { globMatcher, regexMatcher, type PathMatcher } from "./matcher.ts";
 import type { PathOperation } from "./path-pipeline.ts";
 
 export type Command = "ls" | "cat" | "cp";
+export type ProgressMode = "auto" | "always" | "never";
 
 export interface ParsedArgs {
   command: Command;
@@ -11,6 +12,7 @@ export interface ParsedArgs {
   ignoreChecksum: RegExp[];
   proxy: string | undefined;
   lockdown: string | undefined;
+  progress: ProgressMode;
 }
 
 export function parseArgs(argv: readonly string[]): ParsedArgs {
@@ -25,6 +27,7 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
   const ignoreChecksum: RegExp[] = [];
   let proxy: string | undefined;
   let lockdown: string | undefined;
+  let progress: ProgressMode = "auto";
   let optionsEnded = false;
 
   for (let index = 1; index < argv.length; index += 1) {
@@ -52,6 +55,14 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
 
       case "--lockdown":
         lockdown = requireValue(argv, ++index, arg);
+        break;
+
+      case "--progress":
+        progress = parseProgressMode(requireValue(argv, ++index, arg));
+        break;
+
+      case "--no-progress":
+        progress = "never";
         break;
 
       case "--ignore-checksum":
@@ -190,6 +201,7 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
     ignoreChecksum,
     proxy,
     lockdown,
+    progress,
   };
 }
 
@@ -238,4 +250,12 @@ function parseNonNegativeInteger(value: string, option: string): number {
   }
 
   return Number(value);
+}
+
+function parseProgressMode(value: string): ProgressMode {
+  if (value === "auto" || value === "always" || value === "never") {
+    return value;
+  }
+
+  fail(`--progress: expected auto, always, or never`);
 }

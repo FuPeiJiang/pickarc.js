@@ -94,6 +94,14 @@ describe("path pipeline", () => {
     ]);
   });
 
+  test("parses progress options", () => {
+    expect(parseArgs(["cp", "--progress", "always", "archive.zip"]).progress).toBe("always");
+    expect(parseArgs(["cp", "--no-progress", "archive.zip"]).progress).toBe("never");
+    expect(() => parseArgs(["cp", "--progress", "sometimes", "archive.zip"])).toThrow(
+      "expected auto, always, or never",
+    );
+  });
+
   test("supports regex and glob OR groups for includes", async () => {
     const parsed = parseArgs([
       "ls",
