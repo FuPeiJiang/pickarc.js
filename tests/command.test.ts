@@ -60,6 +60,40 @@ describe("pickarc commands", () => {
     expect(result.stdout).toBe("bravo");
   });
 
+  test("ls supports glob include OR groups", async () => {
+    const directory = await makeTempDir();
+    const archive = await writeZip(directory, "fixture.zip", [
+      { path: "toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/a.h", data: "a" },
+      { path: "toolchains/llvm/prebuilt/linux-x86_64/lib/clang/21/lib/linux/b.a", data: "b" },
+      { path: "toolchains/llvm/prebuilt/linux-x86_64/lib/clang/21/include/c.h", data: "c" },
+      { path: "toolchains/llvm/prebuilt/linux-x86_64/bin/clang", data: "clang" },
+    ]);
+
+    const result = await runPickarc(
+      [
+        "ls",
+        "--include-glob",
+        "toolchains/llvm/prebuilt/linux-x86_64/sysroot/**",
+        "--or-glob",
+        "toolchains/llvm/prebuilt/linux-x86_64/lib/clang/*/lib/linux/**",
+        "--or-glob",
+        "toolchains/llvm/prebuilt/linux-x86_64/lib/clang/*/include/**",
+        archive,
+      ],
+      directory,
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe(
+      [
+        "toolchains/llvm/prebuilt/linux-x86_64/lib/clang/21/include/c.h",
+        "toolchains/llvm/prebuilt/linux-x86_64/lib/clang/21/lib/linux/b.a",
+        "toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/a.h",
+        "",
+      ].join("\n"),
+    );
+  });
+
   test("cp skips checksum only by final path", async () => {
     const directory = await makeTempDir();
     const archive = await writeZip(directory, "fixture.zip", [

@@ -1,4 +1,6 @@
 import { fail } from "./errors.ts";
+import type { PathMatcher } from "./matcher.ts";
+import { matchesAny } from "./matcher.ts";
 import {
   assertUsableFinalPath,
   basenameOfVirtualPath,
@@ -10,13 +12,11 @@ import {
 export type PathOperation =
   | {
       kind: "include";
-      pattern: string;
-      regex: RegExp;
+      matchers: PathMatcher[];
     }
   | {
       kind: "exclude";
-      pattern: string;
-      regex: RegExp;
+      matcher: PathMatcher;
     }
   | {
       kind: "replace";
@@ -33,8 +33,7 @@ export type PathOperation =
     }
   | {
       kind: "as-dir";
-      pattern: string;
-      regex: RegExp;
+      matcher: PathMatcher;
       keepExtension: boolean;
     };
 
@@ -65,11 +64,11 @@ export async function applyPathOperations(
   for (const operation of operations) {
     switch (operation.kind) {
       case "include":
-        candidates = candidates.filter((candidate) => testRegex(operation.regex, candidate.path));
+        candidates = candidates.filter((candidate) => matchesAny(operation.matchers, candidate.path));
         break;
 
       case "exclude":
-        candidates = candidates.filter((candidate) => !testRegex(operation.regex, candidate.path));
+        candidates = candidates.filter((candidate) => !operation.matcher.matches(candidate.path));
         break;
 
       case "replace":
@@ -117,7 +116,7 @@ export async function applyPathOperations(
         const next: PathCandidate[] = [];
 
         for (const candidate of candidates) {
-          if (testRegex(operation.regex, candidate.path)) {
+          if (operation.matcher.matches(candidate.path)) {
             next.push(...(await expandAsDir(candidate, operation.keepExtension)));
           } else {
             next.push(candidate);
@@ -167,9 +166,4 @@ export async function prepareFinalCandidates(
   expandAsDir?: ExpandAsDir,
 ): Promise<PathCandidate[]> {
   return sortAndValidateFinalPaths(await applyPathOperations(input, operations, expandAsDir));
-}
-
-function testRegex(regex: RegExp, value: string): boolean {
-  regex.lastIndex = 0;
-  return regex.test(value);
 }

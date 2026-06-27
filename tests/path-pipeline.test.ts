@@ -73,6 +73,10 @@ describe("path pipeline", () => {
       "\\.zip$",
       "--archive-is-dir-keep-ext",
       "\\.cbz$",
+      "--archive-is-dir-glob",
+      "**/*.zip",
+      "--archive-is-dir-keep-ext-glob",
+      "**/*.cbz",
       "--cut-prefix",
       "1",
       "--strip-components",
@@ -83,8 +87,120 @@ describe("path pipeline", () => {
     expect(parsed.operations.map((operation) => operation.kind)).toEqual([
       "as-dir",
       "as-dir",
+      "as-dir",
+      "as-dir",
       "strip-components",
       "strip-components",
+    ]);
+  });
+
+  test("supports regex and glob OR groups for includes", async () => {
+    const parsed = parseArgs([
+      "ls",
+      "--include-glob",
+      "src/**/*.txt",
+      "--or",
+      "^docs/.*\\.md$",
+      "--or-glob",
+      "images/**/*.img",
+      "archive.zip",
+    ]);
+
+    const paths = await prepareFinalCandidates(
+      [
+        candidate("src/a.txt"),
+        candidate("src/nested/b.txt"),
+        candidate("docs/readme.md"),
+        candidate("images/disk.img"),
+        candidate("images/raw/disk.img"),
+        candidate("vendor/a.txt"),
+      ],
+      parsed.operations,
+    );
+
+    expect(paths.map((entry) => entry.path)).toEqual([
+      "docs/readme.md",
+      "images/disk.img",
+      "images/raw/disk.img",
+      "src/a.txt",
+      "src/nested/b.txt",
+    ]);
+  });
+
+  test("starts a new include group for each include option", async () => {
+    const parsed = parseArgs([
+      "ls",
+      "--include-glob",
+      "src/**",
+      "--or-glob",
+      "docs/**",
+      "--include",
+      "\\.txt$",
+      "archive.zip",
+    ]);
+
+    const paths = await prepareFinalCandidates(
+      [
+        candidate("src/a.txt"),
+        candidate("src/a.md"),
+        candidate("docs/b.txt"),
+        candidate("docs/b.md"),
+      ],
+      parsed.operations,
+    );
+
+    expect(paths.map((entry) => entry.path)).toEqual(["docs/b.txt", "src/a.txt"]);
+  });
+
+  test("supports glob excludes", async () => {
+    const parsed = parseArgs([
+      "ls",
+      "--include-glob",
+      "**/*.txt",
+      "--exclude-glob",
+      "**/vendor/**",
+      "archive.zip",
+    ]);
+
+    const paths = await prepareFinalCandidates(
+      [
+        candidate("src/a.txt"),
+        candidate("src/vendor/b.txt"),
+        candidate("vendor/c.txt"),
+      ],
+      parsed.operations,
+    );
+
+    expect(paths.map((entry) => entry.path)).toEqual(["src/a.txt"]);
+  });
+
+  test("requires --or to follow an include group", () => {
+    expect(() => parseArgs(["ls", "--or", "x", "archive.zip"])).toThrow(
+      "expected a preceding",
+    );
+    expect(() =>
+      parseArgs(["ls", "--include", "x", "--exclude", "y", "--or", "z", "archive.zip"]),
+    ).toThrow("expected a preceding");
+  });
+
+  test("uses glob matchers for as-dir", async () => {
+    const parsed = parseArgs(["ls", "--as-dir-glob", "**/*.zip", "archive.zip"]);
+    const expanded = await prepareFinalCandidates(
+      [candidate("nested/data.zip"), candidate("nested/data.txt")],
+      parsed.operations,
+      async (entry) => [
+        {
+          ...entry,
+          id: `${entry.id}:expanded`,
+          path: `${entry.path}/file.txt`,
+          sourcePath: `${entry.sourcePath}!file.txt`,
+        },
+      ],
+    );
+
+    expect(expanded.map((entry) => entry.path)).toEqual([
+      "nested/data.txt",
+      "nested/data.zip/file.txt",
     ]);
   });
 });

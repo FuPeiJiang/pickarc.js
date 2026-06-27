@@ -1,4 +1,5 @@
 import { fail } from "./errors.ts";
+import { globMatcher, regexMatcher, type PathMatcher } from "./matcher.ts";
 import type { PathOperation } from "./path-pipeline.ts";
 
 export type Command = "ls" | "cat" | "cp";
@@ -57,14 +58,31 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
         ignoreChecksum.push(compileRegex(requireValue(argv, ++index, arg), arg));
         break;
 
+      case "--match":
       case "--matches":
       case "--include": {
         const pattern = requireValue(argv, ++index, arg);
-        operations.push({
-          kind: "include",
-          pattern,
-          regex: compileRegex(pattern, arg),
-        });
+        operations.push(includeOperation(regexMatcher(pattern, arg)));
+        break;
+      }
+
+      case "--include-glob":
+      case "--match-glob":
+      case "--matches-glob": {
+        const pattern = requireValue(argv, ++index, arg);
+        operations.push(includeOperation(globMatcher(pattern, arg)));
+        break;
+      }
+
+      case "--or": {
+        const pattern = requireValue(argv, ++index, arg);
+        appendOrMatcher(operations, regexMatcher(pattern, arg), arg);
+        break;
+      }
+
+      case "--or-glob": {
+        const pattern = requireValue(argv, ++index, arg);
+        appendOrMatcher(operations, globMatcher(pattern, arg), arg);
         break;
       }
 
@@ -72,8 +90,16 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
         const pattern = requireValue(argv, ++index, arg);
         operations.push({
           kind: "exclude",
-          pattern,
-          regex: compileRegex(pattern, arg),
+          matcher: regexMatcher(pattern, arg),
+        });
+        break;
+      }
+
+      case "--exclude-glob": {
+        const pattern = requireValue(argv, ++index, arg);
+        operations.push({
+          kind: "exclude",
+          matcher: globMatcher(pattern, arg),
         });
         break;
       }
@@ -109,8 +135,18 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
         const pattern = requireValue(argv, ++index, arg);
         operations.push({
           kind: "as-dir",
-          pattern,
-          regex: compileRegex(pattern, arg),
+          matcher: regexMatcher(pattern, arg),
+          keepExtension: false,
+        });
+        break;
+      }
+
+      case "--as-dir-glob":
+      case "--archive-is-dir-glob": {
+        const pattern = requireValue(argv, ++index, arg);
+        operations.push({
+          kind: "as-dir",
+          matcher: globMatcher(pattern, arg),
           keepExtension: false,
         });
         break;
@@ -121,8 +157,18 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
         const pattern = requireValue(argv, ++index, arg);
         operations.push({
           kind: "as-dir",
-          pattern,
-          regex: compileRegex(pattern, arg),
+          matcher: regexMatcher(pattern, arg),
+          keepExtension: true,
+        });
+        break;
+      }
+
+      case "--as-dir-keep-ext-glob":
+      case "--archive-is-dir-keep-ext-glob": {
+        const pattern = requireValue(argv, ++index, arg);
+        operations.push({
+          kind: "as-dir",
+          matcher: globMatcher(pattern, arg),
           keepExtension: true,
         });
         break;
@@ -163,6 +209,27 @@ function compileRegex(pattern: string, option: string): RegExp {
   } catch (error) {
     fail(`${option}: invalid regex ${JSON.stringify(pattern)}: ${String(error)}`);
   }
+}
+
+function includeOperation(matcher: PathMatcher): PathOperation {
+  return {
+    kind: "include",
+    matchers: [matcher],
+  };
+}
+
+function appendOrMatcher(
+  operations: PathOperation[],
+  matcher: PathMatcher,
+  option: string,
+): void {
+  const previous = operations[operations.length - 1];
+
+  if (previous?.kind !== "include") {
+    fail(`${option}: expected a preceding --include, --match, or --include-glob`);
+  }
+
+  previous.matchers.push(matcher);
 }
 
 function parseNonNegativeInteger(value: string, option: string): number {
