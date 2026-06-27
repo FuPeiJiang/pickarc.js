@@ -99,7 +99,7 @@ function candidate(path: string): PathCandidate {
     compressionMethod: 0,
     absoluteFromReplace: false,
     isSymlink: false,
-    readData: async () => {
+    readData: async (_options) => {
       throw new Error("content should not be read");
     },
   };

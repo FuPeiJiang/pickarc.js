@@ -1,6 +1,8 @@
 #!/usr/bin/env bun
 
 import { PickarcError } from "./errors.ts";
+import { runCommand } from "./commands.ts";
+import { parseArgs } from "./options.ts";
 
 export async function main(argv = Bun.argv.slice(2)): Promise<void> {
   const command = argv[0];
@@ -15,7 +17,7 @@ export async function main(argv = Bun.argv.slice(2)): Promise<void> {
     return;
   }
 
-  throw new PickarcError(`unknown command: ${command}`);
+  await runCommand(parseArgs(argv));
 }
 
 function printHelp(): void {

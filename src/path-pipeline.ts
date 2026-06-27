@@ -47,7 +47,7 @@ export interface PathCandidate {
   compressionMethod: number | undefined;
   absoluteFromReplace: boolean;
   isSymlink: boolean;
-  readData: () => Promise<Uint8Array>;
+  readData: (options: { checkCrc: boolean }) => Promise<Uint8Array>;
 }
 
 export type ExpandAsDir = (
