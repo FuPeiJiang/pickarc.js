@@ -110,12 +110,12 @@ describe("path pipeline", () => {
     );
   });
 
-  test("parses http transport options", () => {
-    expect(parseArgs(["ls", "--http", "http1", "archive.zip"]).httpTransport).toBe("http1");
-    expect(parseArgs(["ls", "--http", "http2", "archive.zip"]).httpTransport).toBe("http2");
-    expect(parseArgs(["ls", "archive.zip"]).httpTransport).toBe("fetch");
-    expect(() => parseArgs(["ls", "--http", "http3", "archive.zip"])).toThrow(
-      "expected fetch, http1, or http2",
+  test("parses HTTP safety options", () => {
+    expect(parseArgs(["ls", "archive.zip"]).insecure).toBe(false);
+    expect(parseArgs(["ls", "--insecure", "archive.zip"]).insecure).toBe(true);
+    expect(parseArgs(["ls", "-k", "archive.zip"]).insecure).toBe(true);
+    expect(() => parseArgs(["ls", "--http", "http2", "archive.zip"])).toThrow(
+      "unknown option: --http",
     );
   });
 

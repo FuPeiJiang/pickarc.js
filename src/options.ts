@@ -1,7 +1,6 @@
 import { fail } from "./errors.ts";
 import { globMatcher, regexMatcher, type PathMatcher } from "./matcher.ts";
 import type { PathOperation } from "./path-pipeline.ts";
-import type { HttpTransport } from "./range-source.ts";
 
 export type Command = "ls" | "cat" | "cp" | "du" | "stat";
 export type ProgressMode = "auto" | "always" | "never";
@@ -13,7 +12,7 @@ export interface ParsedArgs {
   operations: PathOperation[];
   ignoreChecksum: RegExp[];
   proxy: string | undefined;
-  httpTransport: HttpTransport;
+  insecure: boolean;
   lockdown: string | undefined;
   progress: ProgressMode;
   jobs: number;
@@ -42,7 +41,7 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
   const operations: PathOperation[] = [];
   const ignoreChecksum: RegExp[] = [];
   let proxy: string | undefined;
-  let httpTransport: HttpTransport = "fetch";
+  let insecure = false;
   let lockdown: string | undefined;
   let progress: ProgressMode = "auto";
   let jobs = 1;
@@ -67,7 +66,7 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
       continue;
     }
 
-    if (!arg.startsWith("--")) {
+    if (!arg.startsWith("--") && arg !== "-k") {
       archives.push(arg);
       continue;
     }
@@ -77,8 +76,9 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
         proxy = requireValue(argv, ++index, arg);
         break;
 
-      case "--http":
-        httpTransport = parseHttpTransport(requireValue(argv, ++index, arg));
+      case "-k":
+      case "--insecure":
+        insecure = true;
         break;
 
       case "--lockdown":
@@ -256,7 +256,7 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
     operations,
     ignoreChecksum,
     proxy,
-    httpTransport,
+    insecure,
     lockdown,
     progress,
     jobs,
@@ -330,14 +330,6 @@ function parseProgressMode(value: string): ProgressMode {
   }
 
   fail(`--progress: expected auto, always, or never`);
-}
-
-function parseHttpTransport(value: string): HttpTransport {
-  if (value === "fetch" || value === "http1" || value === "http2") {
-    return value;
-  }
-
-  fail(`--http: expected fetch, http1, or http2`);
 }
 
 function parseDuGroupBy(value: string): DuGroupBy {

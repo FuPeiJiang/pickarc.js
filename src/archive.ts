@@ -1,13 +1,12 @@
 import { fail } from "./errors.ts";
 import { openRangeSource, type RangeSource } from "./range-source.ts";
-import type { HttpTransport } from "./range-source.ts";
 import type { PathCandidate } from "./path-pipeline.ts";
 import { joinVirtualPath, stripLastExtension } from "./path-utils.ts";
 import { ZipArchive, type ZipEntry } from "./zip.ts";
 
 export interface ArchiveOpenOptions {
   proxy: string | undefined;
-  httpTransport: HttpTransport;
+  insecure: boolean;
 }
 
 export interface ArchiveSet {

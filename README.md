@@ -4,11 +4,35 @@ Pick files from local or remote ZIP archives after applying ordered path rules.
 
 ```sh
 pickarc ls [options] <archive...>
+pickarc du [options] <archive...>
+pickarc stat [options] <archive...>
 pickarc cat [options] <archive...>
 pickarc cp [options] <archive...>
 ```
 
 The package is TypeScript for Bun and runs directly from `src/cli.ts`; there is no build step and no `dist` output.
+
+## Install
+
+From a GitHub repo:
+
+```sh
+bun add -g github:<owner>/pickarc.js
+```
+
+Tarball fallback:
+
+```sh
+bun add -g https://github.com/<owner>/pickarc.js/archive/refs/heads/main.tar.gz
+```
+
+From a local checkout:
+
+```sh
+bun install
+bun link
+pickarc --help
+```
 
 ## Status
 
@@ -16,16 +40,16 @@ Implemented:
 
 - local `.zip` files
 - HTTP(S) ZIP files through range requests
-- explicit HTTP transport selection with `--http fetch`, `--http http1`, and `--http http2`
-- `ls`, `cat`, `cp`
+- `ls`, `du`, `stat`, `cat`, `cp`
 - stored and deflated ZIP entries
 - CRC32 checks by default
 - nested stored ZIP expansion with `--as-dir`
 - duplicate final-path detection before normal file reads
+- proxy support through Bun `fetch`
+- optional `-k, --insecure` TLS verification disable switch
 
 Planned:
 
-- explicit QUIC transport preference when the runtime exposes a stable control
 - `.rar` and `.7z`
 - `tar`
 - `mount`
@@ -62,24 +86,51 @@ Globs use `Bun.Glob` and match normalized archive paths directly. `--include`, `
 
 Paths always use `/`. Rewrites normalize repeated slashes and `.` components. Any `..` component is refused.
 
-## HTTP Transport
-
-Remote archives use Bun `fetch` by default:
+### Glob Examples
 
 ```sh
-pickarc ls --http fetch https://example.com/archive.zip
+# All disk images.
+pickarc ls --include-glob '**/*.img' archive.zip
+
+# Include source files, but skip vendored paths.
+pickarc ls \
+  --include-glob 'src/**/*.ts' \
+  --exclude-glob '**/vendor/**' \
+  archive.zip
+
+# Match either a sysroot tree or selected Clang trees.
+pickarc ls \
+  --include-glob 'android-ndk-r29/toolchains/llvm/prebuilt/linux-x86_64/sysroot/**' \
+  --or-glob 'android-ndk-r29/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/*/lib/linux/**' \
+  --or-glob 'android-ndk-r29/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/*/include/**' \
+  archive.zip
+
+# Treat matching stored ZIP entries as directories.
+pickarc ls \
+  --as-dir-keep-ext-glob '*/image-*.zip' \
+  --include-glob '*/image-*.zip/*.img' \
+  factory.zip
 ```
 
-Use explicit transports to compare behavior:
+## Remote Archives
+
+Remote archives use Bun `fetch` with HTTP range requests:
 
 ```sh
-pickarc ls --http http1 https://example.com/archive.zip
-pickarc ls --http http2 https://example.com/archive.zip
+pickarc ls https://example.com/archive.zip
 ```
 
-`--http http1` uses a keep-alive HTTP/1.1 client. `--http http2` uses a reusable HTTP/2 session. `--proxy` is currently supported only with `--http fetch`.
+Use `--proxy <url>` to pass a proxy to Bun fetch.
 
-Example, copy only the Android NDK LLVM sysroot and Clang runtime/include trees while removing the top archive directory:
+`-k, --insecure` disables TLS certificate verification for HTTPS requests. This is dangerous and should only be used for testing or trusted networks:
+
+```sh
+pickarc ls --insecure https://self-signed.example/archive.zip
+```
+
+## Real Examples
+
+Copy only the Android NDK LLVM sysroot and Clang runtime/include trees while removing the top archive directory:
 
 ```sh
 pickarc cp \
@@ -88,6 +139,17 @@ pickarc cp \
   --or-glob 'android-ndk-r29/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/*/include/**' \
   --strip-components 1 \
   https://dl.google.com/android/repository/android-ndk-r29-linux.zip
+```
+
+Extract `boot.img` and `init_boot.img` from the stored inner ZIP inside a Pixel factory image:
+
+```sh
+pickarc cp \
+  --as-dir-keep-ext-glob '*/image-*.zip' \
+  --include-glob '*/image-*.zip/boot.img' \
+  --or-glob '*/image-*.zip/init_boot.img' \
+  --flatten \
+  https://dl.google.com/dl/android/aosp/husky-uq1a.240205.004-factory-594e3ca4.zip
 ```
 
 ## Copying
@@ -116,7 +178,7 @@ pickarc cp archive.zip \
 
 `cp` writes files with exclusive create flags and `O_NOFOLLOW`, mode `0600`, and refuses to overwrite existing files. Existing symlinked parent directories are rejected during directory creation/walk checks.
 
-For remote ZIPs, `cp` validates final paths first, then downloads files in physical archive order. It resolves selected ZIP data offsets, merges nearby compressed byte ranges into bounded exact range reads, and serves per-file extraction from that cache instead of making thousands of tiny requests.
+For remote ZIPs, `cp` validates final paths first, then downloads files in physical archive order. It plans selected byte ranges from ZIP metadata, merges nearby compressed ranges into bounded reads, and serves per-file extraction from that cache instead of making thousands of tiny requests.
 
 `cp` shows progress on `stderr` when running in an interactive terminal. Control it with:
 
@@ -152,6 +214,14 @@ pickarc du --json archive.zip
 
 `du --by dir` reports recursive directory totals. By default it shows `.` and first-level directories; use `--depth <n>` or `--all` to control how many directory groups are printed. `--bytes` prints raw byte counts instead of human-readable sizes.
 
+Example output:
+
+```text
+compressed  uncompressed  files  dirs  entries  path
+197 MiB     688 MiB       5,959  271   6,230    .
+84.3 MiB    302 MiB       2,140  94    2,234    toolchains
+```
+
 `stat` prints per-entry metadata:
 
 ```sh
@@ -161,6 +231,12 @@ pickarc stat --jsonl archive.zip
 ```
 
 JSON metadata includes final path, source path, archive label, kind, compression method, compressed and uncompressed size, CRC32, symlink status, and local header offset.
+
+Example JSONL:
+
+```json
+{"path":"boot.img","sourcePath":"image.zip!boot.img","archive":"factory.zip!image.zip","kind":"file","compressionMethod":8,"compressionName":"deflate","compressedSize":67108864,"uncompressedSize":67108864,"crc32":"1234abcd","isSymlink":false,"localHeaderOffset":1024}
+```
 
 ## Checksums
 

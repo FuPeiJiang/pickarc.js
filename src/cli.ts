@@ -39,7 +39,7 @@ Commands:
 
 Options:
   --proxy <url>
-  --http <fetch|http1|http2>
+  -k, --insecure    Disable TLS certificate verification. Dangerous.
   --lockdown <path>
   --progress <auto|always|never>, --no-progress
   --jobs <n>
@@ -60,6 +60,11 @@ Options:
   --as-dir-glob <glob>, --archive-is-dir-glob <glob>
   --as-dir-keep-ext <regex>, --archive-is-dir-keep-ext <regex>
   --as-dir-keep-ext-glob <glob>, --archive-is-dir-keep-ext-glob <glob>
+
+Examples:
+  pickarc ls --include-glob '**/*.img' archive.zip
+  pickarc du --by dir --depth 1 --include-glob 'src/**' archive.zip
+  pickarc cp --as-dir-keep-ext-glob '*/image-*.zip' --include-glob '*/image-*.zip/boot.img' archive.zip
 `);
 }
 

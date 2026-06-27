@@ -11,7 +11,7 @@ export async function runCommand(options: ParsedArgs): Promise<void> {
 
   const archiveSet = await collectArchiveCandidates(options.archives, {
     proxy: options.proxy,
-    httpTransport: options.httpTransport,
+    insecure: options.insecure,
   });
 
   try {
