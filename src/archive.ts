@@ -68,6 +68,7 @@ function candidateFromZipEntry(
     path,
     kind: entry.kind,
     compressionMethod: entry.compressionMethod,
+    crc32: entry.crc32,
     compressedSize: entry.compressedSize,
     uncompressedSize: entry.uncompressedSize,
     physicalOffset: entry.localHeaderOffset,

@@ -119,6 +119,27 @@ describe("path pipeline", () => {
     );
   });
 
+  test("parses metadata output options", () => {
+    const parsed = parseArgs([
+      "du",
+      "--json",
+      "--bytes",
+      "--by",
+      "dir",
+      "--depth",
+      "2",
+      "archive.zip",
+    ]);
+
+    expect(parsed.json).toBe(true);
+    expect(parsed.bytes).toBe(true);
+    expect(parsed.groupBy).toBe("dir");
+    expect(parsed.depth).toBe(2);
+    expect(() => parseArgs(["du", "--by", "owner", "archive.zip"])).toThrow(
+      "expected none, archive, or dir",
+    );
+  });
+
   test("supports regex and glob OR groups for includes", async () => {
     const parsed = parseArgs([
       "ls",
@@ -238,6 +259,7 @@ function candidate(path: string): PathCandidate {
     path,
     kind: "file",
     compressionMethod: 0,
+    crc32: 0,
     compressedSize: 0,
     uncompressedSize: 0,
     physicalOffset: undefined,

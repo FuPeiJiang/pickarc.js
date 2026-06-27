@@ -44,6 +44,7 @@ export interface PathCandidate {
   path: string;
   kind: "file" | "directory";
   compressionMethod: number | undefined;
+  crc32: number | undefined;
   compressedSize: number;
   uncompressedSize: number;
   physicalOffset: number | undefined;

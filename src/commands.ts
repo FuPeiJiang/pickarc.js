@@ -1,11 +1,14 @@
 import { collectArchiveCandidates, expandStoredZipAsDirectory } from "./archive.ts";
 import { fail } from "./errors.ts";
+import { diskUsage, statEntries } from "./metadata.ts";
 import type { ParsedArgs } from "./options.ts";
 import { prepareFinalCandidates, type PathCandidate } from "./path-pipeline.ts";
 import { CopyProgress } from "./progress.ts";
 import { createDirectory, writeFileExclusive, writeFileExclusiveStream } from "./safe-write.ts";
 
 export async function runCommand(options: ParsedArgs): Promise<void> {
+  validateCommandOptions(options);
+
   const archiveSet = await collectArchiveCandidates(options.archives, {
     proxy: options.proxy,
     httpTransport: options.httpTransport,
@@ -30,9 +33,46 @@ export async function runCommand(options: ParsedArgs): Promise<void> {
       case "cp":
         await copy(candidates, options.ignoreChecksum, options.lockdown, options.progress, options.jobs);
         break;
+
+      case "du":
+        await diskUsage(candidates, options);
+        break;
+
+      case "stat":
+        await statEntries(candidates, options);
+        break;
     }
   } finally {
     await archiveSet.close();
+  }
+}
+
+function validateCommandOptions(options: ParsedArgs): void {
+  const hasMetadataOutputOption =
+    options.json ||
+    options.jsonl ||
+    options.bytes ||
+    options.groupBy !== "none" ||
+    options.depth !== undefined ||
+    options.all;
+
+  if (
+    options.command !== "du" &&
+    options.command !== "stat" &&
+    hasMetadataOutputOption
+  ) {
+    fail(`${options.command}: metadata output options are only supported by du and stat`);
+  }
+
+  if (
+    options.command === "stat" &&
+    (options.groupBy !== "none" || options.depth !== undefined || options.all)
+  ) {
+    fail(`stat: --by, --depth, and --all are only supported by du`);
+  }
+
+  if (options.command === "du" && options.jsonl) {
+    fail(`du: --jsonl is only supported by stat`);
   }
 }
 

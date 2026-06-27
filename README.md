@@ -141,6 +141,27 @@ libclang_rt.asan.so
 
 `--jobs <n>` controls file extraction concurrency. The default is `1`; higher values can help on some machines, but the Android NDK benchmark is faster sequentially after range grouping.
 
+## Metadata
+
+`du` summarizes selected entries without reading file contents:
+
+```sh
+pickarc du --by dir --depth 1 archive.zip
+pickarc du --json archive.zip
+```
+
+`du --by dir` reports recursive directory totals. By default it shows `.` and first-level directories; use `--depth <n>` or `--all` to control how many directory groups are printed. `--bytes` prints raw byte counts instead of human-readable sizes.
+
+`stat` prints per-entry metadata:
+
+```sh
+pickarc stat archive.zip
+pickarc stat --json archive.zip
+pickarc stat --jsonl archive.zip
+```
+
+JSON metadata includes final path, source path, archive label, kind, compression method, compressed and uncompressed size, CRC32, symlink status, and local header offset.
+
 ## Checksums
 
 CRC32 is checked when reading file contents. `--ignore-checksum <regex>` skips the check only when the final path matches:

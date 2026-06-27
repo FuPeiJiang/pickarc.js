@@ -25,11 +25,15 @@ function printHelp(): void {
 
 Usage:
   pickarc ls [options] <archive...>
+  pickarc du [options] <archive...>
+  pickarc stat [options] <archive...>
   pickarc cat [options] <archive...>
   pickarc cp [options] <archive...>
 
 Commands:
   ls    List final paths after rewrite/filter rules
+  du    Show aggregate compressed/uncompressed sizes
+  stat  Show per-entry metadata
   cat   Write selected file contents to stdout
   cp    Copy selected files to their final paths
 
@@ -39,6 +43,10 @@ Options:
   --lockdown <path>
   --progress <auto|always|never>, --no-progress
   --jobs <n>
+  --json, --jsonl
+  --bytes
+  --by <none|archive|dir>
+  --depth <n>, --all
   --ignore-checksum <regex>
   --include <regex>, --match <regex>, --matches <regex>
   --include-glob <glob>, --match-glob <glob>, --matches-glob <glob>

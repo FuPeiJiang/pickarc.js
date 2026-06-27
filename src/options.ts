@@ -3,8 +3,9 @@ import { globMatcher, regexMatcher, type PathMatcher } from "./matcher.ts";
 import type { PathOperation } from "./path-pipeline.ts";
 import type { HttpTransport } from "./range-source.ts";
 
-export type Command = "ls" | "cat" | "cp";
+export type Command = "ls" | "cat" | "cp" | "du" | "stat";
 export type ProgressMode = "auto" | "always" | "never";
+export type DuGroupBy = "none" | "archive" | "dir";
 
 export interface ParsedArgs {
   command: Command;
@@ -16,12 +17,24 @@ export interface ParsedArgs {
   lockdown: string | undefined;
   progress: ProgressMode;
   jobs: number;
+  json: boolean;
+  jsonl: boolean;
+  bytes: boolean;
+  groupBy: DuGroupBy;
+  depth: number | undefined;
+  all: boolean;
 }
 
 export function parseArgs(argv: readonly string[]): ParsedArgs {
   const command = argv[0];
 
-  if (command !== "ls" && command !== "cat" && command !== "cp") {
+  if (
+    command !== "ls" &&
+    command !== "cat" &&
+    command !== "cp" &&
+    command !== "du" &&
+    command !== "stat"
+  ) {
     fail(command === undefined ? "missing command" : `unknown command: ${command}`);
   }
 
@@ -33,6 +46,12 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
   let lockdown: string | undefined;
   let progress: ProgressMode = "auto";
   let jobs = 1;
+  let json = false;
+  let jsonl = false;
+  let bytes = false;
+  let groupBy: DuGroupBy = "none";
+  let depth: number | undefined;
+  let all = false;
   let optionsEnded = false;
 
   for (let index = 1; index < argv.length; index += 1) {
@@ -76,6 +95,30 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
 
       case "--no-progress":
         progress = "never";
+        break;
+
+      case "--json":
+        json = true;
+        break;
+
+      case "--jsonl":
+        jsonl = true;
+        break;
+
+      case "--bytes":
+        bytes = true;
+        break;
+
+      case "--by":
+        groupBy = parseDuGroupBy(requireValue(argv, ++index, arg));
+        break;
+
+      case "--depth":
+        depth = parseNonNegativeInteger(requireValue(argv, ++index, arg), arg);
+        break;
+
+      case "--all":
+        all = true;
         break;
 
       case "--ignore-checksum":
@@ -217,6 +260,12 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
     lockdown,
     progress,
     jobs,
+    json,
+    jsonl,
+    bytes,
+    groupBy,
+    depth,
+    all,
   };
 }
 
@@ -289,4 +338,12 @@ function parseHttpTransport(value: string): HttpTransport {
   }
 
   fail(`--http: expected fetch, http1, or http2`);
+}
+
+function parseDuGroupBy(value: string): DuGroupBy {
+  if (value === "none" || value === "archive" || value === "dir") {
+    return value;
+  }
+
+  fail(`--by: expected none, archive, or dir`);
 }

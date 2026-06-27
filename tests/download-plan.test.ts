@@ -97,6 +97,7 @@ function candidate(
     path,
     kind,
     compressionMethod: 0,
+    crc32: 0,
     compressedSize: 0,
     uncompressedSize: 0,
     physicalOffset,

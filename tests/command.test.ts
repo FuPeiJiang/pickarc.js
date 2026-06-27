@@ -94,6 +94,105 @@ describe("pickarc commands", () => {
     );
   });
 
+  test("du reports aggregate metadata without reading file contents", async () => {
+    const directory = await makeTempDir();
+    const archive = await writeZip(directory, "fixture.zip", [
+      { path: "dir/" },
+      { path: "dir/a.txt", data: "alpha" },
+      { path: "dir/sub/b.txt", data: "bravo!" },
+    ]);
+
+    const result = await runPickarc(["du", "--bytes", archive], directory);
+    const rows = whitespaceRows(result.stdout);
+
+    expect(result.exitCode).toBe(0);
+    expect(rows).toEqual([
+      ["compressed", "uncompressed", "files", "dirs", "entries"],
+      ["11", "11", "2", "1", "3"],
+    ]);
+  });
+
+  test("du can group recursive totals by directory", async () => {
+    const directory = await makeTempDir();
+    const archive = await writeZip(directory, "fixture.zip", [
+      { path: "dir/" },
+      { path: "dir/a.txt", data: "alpha" },
+      { path: "dir/sub/b.txt", data: "bravo!" },
+    ]);
+
+    const result = await runPickarc(["du", "--bytes", "--by", "dir", "--depth", "1", archive], directory);
+    const rows = whitespaceRows(result.stdout);
+
+    expect(result.exitCode).toBe(0);
+    expect(rows).toEqual([
+      ["compressed", "uncompressed", "files", "dirs", "entries", "path"],
+      ["11", "11", "2", "1", "3", "."],
+      ["11", "11", "2", "1", "3", "dir"],
+    ]);
+  });
+
+  test("du supports JSON output", async () => {
+    const directory = await makeTempDir();
+    const archive = await writeZip(directory, "fixture.zip", [
+      { path: "a.txt", data: "alpha" },
+      { path: "b.txt", data: "bravo!" },
+    ]);
+
+    const result = await runPickarc(["du", "--json", archive], directory);
+
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      files: 2,
+      directories: 0,
+      entries: 2,
+      compressedSize: 11,
+      uncompressedSize: 11,
+      archives: 1,
+    });
+  });
+
+  test("stat reports per-entry metadata as JSON and JSONL", async () => {
+    const directory = await makeTempDir();
+    const archive = await writeZip(directory, "fixture.zip", [
+      { path: "a.txt", data: "alpha" },
+      { path: "dir/" },
+    ]);
+
+    const jsonResult = await runPickarc(["stat", "--json", archive], directory);
+    const entries = JSON.parse(jsonResult.stdout);
+
+    expect(jsonResult.exitCode).toBe(0);
+    expect(entries).toHaveLength(2);
+    expect(entries[0]).toMatchObject({
+      path: "a.txt",
+      sourcePath: "a.txt",
+      kind: "file",
+      compressionMethod: 0,
+      compressionName: "store",
+      compressedSize: 5,
+      uncompressedSize: 5,
+      isSymlink: false,
+    });
+    expect(entries[0].crc32).toMatch(/^[0-9a-f]{8}$/);
+
+    const jsonlResult = await runPickarc(["stat", "--jsonl", "--include", "^a\\.txt$", archive], directory);
+    const lines = jsonlResult.stdout.trim().split("\n");
+
+    expect(jsonlResult.exitCode).toBe(0);
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0]!).path).toBe("a.txt");
+  });
+
+  test("metadata output flags are rejected for path-only commands", async () => {
+    const directory = await makeTempDir();
+    const archive = await writeZip(directory, "fixture.zip", [{ path: "a.txt", data: "alpha" }]);
+
+    const result = await runPickarc(["ls", "--json", archive], directory);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("metadata output options");
+  });
+
   test("cp skips checksum only by final path", async () => {
     const directory = await makeTempDir();
     const archive = await writeZip(directory, "fixture.zip", [
@@ -310,4 +409,11 @@ function mergeEnv(overrides: Record<string, string | undefined> | undefined): Re
   }
 
   return env;
+}
+
+function whitespaceRows(output: string): string[][] {
+  return output
+    .trim()
+    .split("\n")
+    .map((line) => line.trim().split(/\s+/));
 }
