@@ -17,13 +17,13 @@ The package is TypeScript for Bun and runs directly from `src/cli.ts`; there is 
 From a GitHub repo:
 
 ```sh
-bun add -g github:<owner>/pickarc.js
+bun add -g github:FuPeiJiang/pickarc.js
 ```
 
 Tarball fallback:
 
 ```sh
-bun add -g https://github.com/<owner>/pickarc.js/archive/refs/heads/main.tar.gz
+bun add -g https://github.com/FuPeiJiang/pickarc.js/archive/refs/heads/main.tar.gz
 ```
 
 From a local checkout:
