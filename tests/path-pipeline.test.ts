@@ -140,6 +140,37 @@ describe("path pipeline", () => {
     );
   });
 
+  test("parses password sources and path-scoped password rules", () => {
+    const parsed = parseArgs([
+      "cp",
+      "--password-env",
+      "ZIP_PASSWORD",
+      "--password-for",
+      "^secret/",
+      "literal",
+      "--password-file-for-glob",
+      "private/**",
+      "password.txt",
+      "archive.zip",
+    ]);
+
+    expect(parsed.password).toEqual({
+      kind: "env",
+      name: "ZIP_PASSWORD",
+    });
+    expect(parsed.passwordRules).toHaveLength(2);
+    expect(parsed.passwordRules[0]?.matcher.matches("secret/file.txt")).toBe(true);
+    expect(parsed.passwordRules[0]?.source).toEqual({
+      kind: "literal",
+      value: "literal",
+    });
+    expect(parsed.passwordRules[1]?.matcher.matches("private/file.txt")).toBe(true);
+    expect(parsed.passwordRules[1]?.source).toEqual({
+      kind: "file",
+      path: "password.txt",
+    });
+  });
+
   test("supports regex and glob OR groups for includes", async () => {
     const parsed = parseArgs([
       "ls",
@@ -259,12 +290,15 @@ function candidate(path: string): PathCandidate {
     path,
     kind: "file",
     compressionMethod: 0,
+    rawCompressionMethod: 0,
     crc32: 0,
     compressedSize: 0,
     uncompressedSize: 0,
     physicalOffset: undefined,
     absoluteFromReplace: false,
     isSymlink: false,
+    encrypted: false,
+    encryptionMethod: "none",
     readData: async (_options) => {
       throw new Error("content should not be read");
     },

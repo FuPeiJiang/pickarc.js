@@ -74,6 +74,24 @@ export function makeZip(entries: readonly ZipFixtureEntry[]): Uint8Array {
   return concat(chunks);
 }
 
+export function zipCryptoFixture(): Uint8Array {
+  return base64Bytes(
+    "UEsDBAoACQAAAL1821yoB/5JGgAAAA4AAAAKABwAbGVnYWN5LnR4dFVUCQADlSZAapUmQGp1eAsAAQQAAAAABAAAAAAMj/pm13AGB9NzVJ4kstJ7dGzqriFAG1EbxVBLBwioB/5JGgAAAA4AAABQSwECHgMKAAkAAAC9fNtcqAf+SRoAAAAOAAAACgAYAAAAAAABAAAApIEAAAAAbGVnYWN5LnR4dFVUBQADlSZAanV4CwABBAAAAAAEAAAAAFBLBQYAAAAAAQABAFAAAABuAAAAAAA=",
+  );
+}
+
+export function aesZipFixture(): Uint8Array {
+  return base64Bytes(
+    "UEsDBDMAAQBjAL1821wAAAAAJwAAAAsAAAAHAAsAYWVzLnR4dAGZBwACAEFFAwAAjA5PnEweEAivV6FCzHnKAPhpJW8eugt9wWWAjgZMXXXf1clTfJt3UEsBAj8DMwABAGMAvXzbXAAAAAAnAAAACwAAAAcALwAAAAAAAAAggKSBAAAAAGFlcy50eHQKACAAAAAAAAEAGABPCq90bAbdAQAAAAAAAAAAAAAAAAAAAAABmQcAAgBBRQMAAFBLBQYAAAAAAQABAGQAAABXAAAAAAA=",
+  );
+}
+
+export function aesLongZipFixture(): Uint8Array {
+  return base64Bytes(
+    "UEsDBDMAAQBjAKd+21wAAAAAXQAAAEEAAAAIAAsAbG9uZy50eHQBmQcAAgBBRQMAAAG1lNE8PRngiOLH2ZTZ4lBh2X5w31XI04VmCuHM09xV2BvUX4LhGhJKQWjLjLfp4Q112So/MJecIBHlHMqjxLYG8SP02V6lDHpsAD/3O2ygcIP0scSMjWt1B7gLmlBLAQI/AzMAAQBjAKd+21wAAAAAXQAAAEEAAAAIAC8AAAAAAAAAIICkgQAAAABsb25nLnR4dAoAIAAAAAAAAQAYAEGszJZuBt0BAAAAAAAAAAAAAAAAAAAAAAGZBwACAEFFAwAAUEsFBgAAAAABAAEAZQAAAI4AAAAAAA==",
+  );
+}
+
 export function concat(chunks: readonly Uint8Array[]): Uint8Array {
   const total = chunks.reduce((size, chunk) => size + chunk.byteLength, 0);
   const output = new Uint8Array(total);
@@ -85,6 +103,10 @@ export function concat(chunks: readonly Uint8Array[]): Uint8Array {
   }
 
   return output;
+}
+
+function base64Bytes(value: string): Uint8Array {
+  return new Uint8Array(Buffer.from(value, "base64"));
 }
 
 function toBytes(data: string | Uint8Array): Uint8Array {

@@ -6,11 +6,32 @@ export type Command = "ls" | "cat" | "cp" | "du" | "stat";
 export type ProgressMode = "auto" | "always" | "never";
 export type DuGroupBy = "none" | "archive" | "dir";
 
+export type PasswordSource =
+  | {
+      kind: "literal";
+      value: string;
+    }
+  | {
+      kind: "file";
+      path: string;
+    }
+  | {
+      kind: "env";
+      name: string;
+    };
+
+export interface PasswordRule {
+  matcher: PathMatcher;
+  source: PasswordSource;
+}
+
 export interface ParsedArgs {
   command: Command;
   archives: string[];
   operations: PathOperation[];
   ignoreChecksum: RegExp[];
+  password: PasswordSource | undefined;
+  passwordRules: PasswordRule[];
   proxy: string | undefined;
   insecure: boolean;
   lockdown: string | undefined;
@@ -40,6 +61,8 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
   const archives: string[] = [];
   const operations: PathOperation[] = [];
   const ignoreChecksum: RegExp[] = [];
+  const passwordRules: PasswordRule[] = [];
+  let password: PasswordSource | undefined;
   let proxy: string | undefined;
   let insecure = false;
   let lockdown: string | undefined;
@@ -124,6 +147,105 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
       case "--ignore-checksum":
         ignoreChecksum.push(compileRegex(requireValue(argv, ++index, arg), arg));
         break;
+
+      case "--password":
+        password = {
+          kind: "literal",
+          value: requireValue(argv, ++index, arg),
+        };
+        break;
+
+      case "--password-file":
+        password = {
+          kind: "file",
+          path: requireValue(argv, ++index, arg),
+        };
+        break;
+
+      case "--password-env":
+        password = {
+          kind: "env",
+          name: requireValue(argv, ++index, arg),
+        };
+        break;
+
+      case "--password-for": {
+        const pattern = requireValue(argv, ++index, arg);
+        const value = requireValue(argv, ++index, arg);
+        passwordRules.push({
+          matcher: regexMatcher(pattern, arg),
+          source: {
+            kind: "literal",
+            value,
+          },
+        });
+        break;
+      }
+
+      case "--password-file-for": {
+        const pattern = requireValue(argv, ++index, arg);
+        const passwordPath = requireValue(argv, ++index, arg);
+        passwordRules.push({
+          matcher: regexMatcher(pattern, arg),
+          source: {
+            kind: "file",
+            path: passwordPath,
+          },
+        });
+        break;
+      }
+
+      case "--password-env-for": {
+        const pattern = requireValue(argv, ++index, arg);
+        const name = requireValue(argv, ++index, arg);
+        passwordRules.push({
+          matcher: regexMatcher(pattern, arg),
+          source: {
+            kind: "env",
+            name,
+          },
+        });
+        break;
+      }
+
+      case "--password-for-glob": {
+        const pattern = requireValue(argv, ++index, arg);
+        const value = requireValue(argv, ++index, arg);
+        passwordRules.push({
+          matcher: globMatcher(pattern, arg),
+          source: {
+            kind: "literal",
+            value,
+          },
+        });
+        break;
+      }
+
+      case "--password-file-for-glob": {
+        const pattern = requireValue(argv, ++index, arg);
+        const passwordPath = requireValue(argv, ++index, arg);
+        passwordRules.push({
+          matcher: globMatcher(pattern, arg),
+          source: {
+            kind: "file",
+            path: passwordPath,
+          },
+        });
+        break;
+      }
+
+      case "--password-env-for-glob": {
+        const pattern = requireValue(argv, ++index, arg);
+        const name = requireValue(argv, ++index, arg);
+        passwordRules.push({
+          matcher: globMatcher(pattern, arg),
+          source: {
+            kind: "env",
+            name,
+          },
+        });
+        break;
+      }
 
       case "--match":
       case "--matches":
@@ -255,6 +377,8 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
     archives,
     operations,
     ignoreChecksum,
+    password,
+    passwordRules,
     proxy,
     insecure,
     lockdown,

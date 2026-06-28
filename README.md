@@ -43,6 +43,7 @@ Implemented:
 - `ls`, `du`, `stat`, `cat`, `cp`
 - stored and deflated ZIP entries
 - CRC32 checks by default
+- ZipCrypto and WinZip AES encrypted ZIP entries
 - nested stored ZIP expansion with `--as-dir`
 - duplicate final-path detection before normal file reads
 - proxy support through Bun `fetch`
@@ -203,6 +204,43 @@ libclang_rt.asan.so
 
 `--jobs <n>` controls file extraction concurrency. The default is `1`; higher values can help on some machines, but the Android NDK benchmark is faster sequentially after range grouping.
 
+## Encrypted ZIPs
+
+`cat` and `cp` can read traditional ZipCrypto entries and WinZip AES entries. Password rules match final paths after all path operations, so they work with `--replace`, `--strip-components`, and `--flatten`.
+
+Prefer env vars or password files when possible:
+
+```sh
+pickarc cat --password-env ZIP_PASSWORD archive.zip
+
+pickarc cp \
+  --password-file-for-glob 'private/**' ./zip-password.txt \
+  --include-glob 'private/**' \
+  archive.zip
+```
+
+Literal passwords are also supported, but they can be visible in process lists and shell history:
+
+```sh
+pickarc cp --password-for-glob '*.txt' 'secret' archive.zip
+```
+
+Available password options:
+
+- `--password <password>`
+- `--password-file <path>`
+- `--password-env <name>`
+- `--password-for <regex> <password>`
+- `--password-file-for <regex> <path>`
+- `--password-env-for <regex> <name>`
+- `--password-for-glob <glob> <password>`
+- `--password-file-for-glob <glob> <path>`
+- `--password-env-for-glob <glob> <name>`
+
+Password files have one trailing line ending stripped.
+
+PKWARE strong encryption is not supported.
+
 ## Metadata
 
 `du` summarizes selected entries without reading file contents:
@@ -230,12 +268,12 @@ pickarc stat --json archive.zip
 pickarc stat --jsonl archive.zip
 ```
 
-JSON metadata includes final path, source path, archive label, kind, compression method, compressed and uncompressed size, CRC32, symlink status, and local header offset.
+JSON metadata includes final path, source path, archive label, kind, compression method, raw compression method, encryption method, compressed and uncompressed size, CRC32, symlink status, and local header offset.
 
 Example JSONL:
 
 ```json
-{"path":"boot.img","sourcePath":"image.zip!boot.img","archive":"factory.zip!image.zip","kind":"file","compressionMethod":8,"compressionName":"deflate","compressedSize":67108864,"uncompressedSize":67108864,"crc32":"1234abcd","isSymlink":false,"localHeaderOffset":1024}
+{"path":"boot.img","sourcePath":"image.zip!boot.img","archive":"factory.zip!image.zip","kind":"file","compressionMethod":8,"rawCompressionMethod":8,"compressionName":"deflate","encrypted":false,"encryptionMethod":"none","compressedSize":67108864,"uncompressedSize":67108864,"crc32":"1234abcd","isSymlink":false,"localHeaderOffset":1024}
 ```
 
 ## Checksums
@@ -246,6 +284,8 @@ CRC32 is checked when reading file contents. `--ignore-checksum <regex>` skips t
 pickarc cp archive.zip --ignore-checksum '^legacy/bad.bin$'
 ```
 
+WinZip AES AE-2 entries are authenticated with their AES HMAC instead of the ZIP CRC32 field, which is normally stored as zero.
+
 ## Nested ZIPs
 
 `--as-dir` treats a matching ZIP entry as a directory. The entry must be stored with ZIP compression method `0`; compressed nested archives are refused.
@@ -255,6 +295,8 @@ pickarc ls outer.zip --as-dir '\\.zip$'
 ```
 
 Without `--as-dir-keep-ext`, `nested.zip/file.txt` is listed as `nested/file.txt`.
+
+Encrypted nested ZIP entries are refused for `--as-dir`. Supporting them without buffering the whole nested archive needs a seekable encrypted range source and authentication policy.
 
 ## Development
 

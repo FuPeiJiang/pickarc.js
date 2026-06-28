@@ -48,6 +48,15 @@ Options:
   --by <none|archive|dir>
   --depth <n>, --all
   --ignore-checksum <regex>
+  --password <password>
+  --password-file <path>
+  --password-env <name>
+  --password-for <regex> <password>
+  --password-file-for <regex> <path>
+  --password-env-for <regex> <name>
+  --password-for-glob <glob> <password>
+  --password-file-for-glob <glob> <path>
+  --password-env-for-glob <glob> <name>
   --include <regex>, --match <regex>, --matches <regex>
   --include-glob <glob>, --match-glob <glob>, --matches-glob <glob>
   --or <regex>, --or-glob <glob>
@@ -64,6 +73,7 @@ Options:
 Examples:
   pickarc ls --include-glob '**/*.img' archive.zip
   pickarc du --by dir --depth 1 --include-glob 'src/**' archive.zip
+  pickarc cat --password-env ZIP_PASSWORD archive.zip
   pickarc cp --as-dir-keep-ext-glob '*/image-*.zip' --include-glob '*/image-*.zip/boot.img' archive.zip
 `);
 }

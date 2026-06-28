@@ -2,12 +2,17 @@ import { collectArchiveCandidates, expandStoredZipAsDirectory } from "./archive.
 import { fail } from "./errors.ts";
 import { diskUsage, statEntries } from "./metadata.ts";
 import type { ParsedArgs } from "./options.ts";
+import { PasswordResolver } from "./passwords.ts";
 import { prepareFinalCandidates, type PathCandidate } from "./path-pipeline.ts";
 import { CopyProgress } from "./progress.ts";
 import { createDirectory, writeFileExclusive, writeFileExclusiveStream } from "./safe-write.ts";
 
 export async function runCommand(options: ParsedArgs): Promise<void> {
   validateCommandOptions(options);
+  const passwords = new PasswordResolver({
+    fallback: options.password,
+    rules: options.passwordRules,
+  });
 
   const archiveSet = await collectArchiveCandidates(options.archives, {
     proxy: options.proxy,
@@ -27,11 +32,11 @@ export async function runCommand(options: ParsedArgs): Promise<void> {
         break;
 
       case "cat":
-        await cat(candidates, options.ignoreChecksum);
+        await cat(candidates, options, passwords);
         break;
 
       case "cp":
-        await copy(candidates, options.ignoreChecksum, options.lockdown, options.progress, options.jobs);
+        await copy(candidates, options, passwords);
         break;
 
       case "du":
@@ -84,7 +89,11 @@ async function list(candidates: readonly PathCandidate[]): Promise<void> {
   console.log(candidates.map((candidate) => candidate.path).join("\n"));
 }
 
-async function cat(candidates: readonly PathCandidate[], ignoreChecksum: readonly RegExp[]): Promise<void> {
+async function cat(
+  candidates: readonly PathCandidate[],
+  options: ParsedArgs,
+  passwords: PasswordResolver,
+): Promise<void> {
   const plan = planCopyOrder(candidates);
 
   for (const candidate of plan) {
@@ -93,7 +102,8 @@ async function cat(candidates: readonly PathCandidate[], ignoreChecksum: readonl
     }
 
     const data = await candidate.readData({
-      checkCrc: shouldCheckChecksum(candidate.path, ignoreChecksum),
+      checkCrc: shouldCheckChecksum(candidate.path, options.ignoreChecksum),
+      password: await passwords.resolve(candidate.path),
     });
     await writeStdout(data);
   }
@@ -101,10 +111,8 @@ async function cat(candidates: readonly PathCandidate[], ignoreChecksum: readonl
 
 async function copy(
   candidates: readonly PathCandidate[],
-  ignoreChecksum: readonly RegExp[],
-  lockdown: string | undefined,
-  progressMode: ParsedArgs["progress"],
-  jobs: number,
+  options: ParsedArgs,
+  passwords: PasswordResolver,
 ): Promise<void> {
   const files: PathCandidate[] = [];
   const directories: PathCandidate[] = [];
@@ -122,7 +130,7 @@ async function copy(
   }
 
   const progress = new CopyProgress({
-    mode: progressMode,
+    mode: options.progress,
   });
 
   progress.start({
@@ -144,7 +152,7 @@ async function copy(
   progress.finishPlanning();
 
   for (let index = 0; index < directories.length; index += 1) {
-    await createDirectory(directories[index]!.path, lockdown);
+    await createDirectory(directories[index]!.path, options.lockdown);
   }
 
   for (let groupIndex = 0; groupIndex < groups.length; groupIndex += 1) {
@@ -154,12 +162,12 @@ async function copy(
       await group.files[0]!.primeRange(group.range.offset, group.range.length);
     }
 
-    await runLimited(group.files, jobs, async (candidate) => {
+    await runLimited(group.files, options.jobs, async (candidate) => {
       if (candidate.isSymlink) {
         fail(`${candidate.path}: refusing to extract ZIP symlink entry`);
       }
 
-      await copyFile(candidate, ignoreChecksum, lockdown, progress);
+      await copyFile(candidate, options, passwords, progress);
     });
   }
 
@@ -228,8 +236,8 @@ const bufferedCopyThreshold = 0;
 
 async function copyFile(
   candidate: PathCandidate,
-  ignoreChecksum: readonly RegExp[],
-  lockdown: string | undefined,
+  options: ParsedArgs,
+  passwords: PasswordResolver,
   progress: CopyProgress,
 ): Promise<void> {
   progress.startFile({
@@ -239,9 +247,10 @@ async function copyFile(
 
   if (candidate.compressedSize <= bufferedCopyThreshold) {
     const data = await candidate.readData({
-      checkCrc: shouldCheckChecksum(candidate.path, ignoreChecksum),
+      checkCrc: shouldCheckChecksum(candidate.path, options.ignoreChecksum),
+      password: await passwords.resolve(candidate.path),
     });
-    await writeFileExclusive(candidate.path, data, lockdown);
+    await writeFileExclusive(candidate.path, data, options.lockdown);
     progress.advanceFile(data.byteLength);
     progress.finishFile();
     return;
@@ -250,9 +259,10 @@ async function copyFile(
   await writeFileExclusiveStream(
     candidate.path,
     candidate.streamData({
-      checkCrc: shouldCheckChecksum(candidate.path, ignoreChecksum),
+      checkCrc: shouldCheckChecksum(candidate.path, options.ignoreChecksum),
+      password: await passwords.resolve(candidate.path),
     }),
-    lockdown,
+    options.lockdown,
     (bytes) => {
       progress.advanceFile(bytes);
     },

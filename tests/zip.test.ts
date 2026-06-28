@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { BufferRangeSource } from "../src/range-source.ts";
 import { ZipArchive } from "../src/zip.ts";
-import { makeZip } from "./zip-fixtures.ts";
+import {
+  aesLongZipFixture,
+  aesZipFixture,
+  makeZip,
+  zipCryptoFixture,
+} from "./zip-fixtures.ts";
 
 describe("ZipArchive", () => {
   test("lists central directory entries", async () => {
@@ -95,6 +100,76 @@ describe("ZipArchive", () => {
     const [entry] = await archive.entries();
 
     await expect(archive.readEntry(entry!, { checkCrc: true })).rejects.toThrow("CRC32 mismatch");
+  });
+
+  test("reads ZipCrypto encrypted entries", async () => {
+    const archive = ZipArchive.fromBuffer(zipCryptoFixture(), "legacy.zip");
+    const [entry] = await archive.entries();
+
+    expect(entry?.path).toBe("legacy.txt");
+    expect(entry?.encrypted).toBe(true);
+    expect(entry?.encryptionMethod).toBe("zipcrypto");
+    expect(new TextDecoder().decode(await archive.readEntry(entry!, {
+      checkCrc: true,
+      password: "swordfish",
+    }))).toBe("legacy secret\n");
+    expect(await readStreamText(archive.streamEntry(entry!, {
+      checkCrc: true,
+      chunkSize: 5,
+      password: "swordfish",
+    }))).toBe("legacy secret\n");
+    await expect(archive.readEntry(entry!, { checkCrc: true })).rejects.toThrow(
+      "requires a password",
+    );
+    await expect(archive.readEntry(entry!, {
+      checkCrc: true,
+      password: "wrong",
+    })).rejects.toThrow("wrong password");
+  });
+
+  test("reads WinZip AES encrypted entries", async () => {
+    const archive = ZipArchive.fromBuffer(aesZipFixture(), "aes.zip");
+    const [entry] = await archive.entries();
+
+    expect(entry?.path).toBe("aes.txt");
+    expect(entry?.encrypted).toBe(true);
+    expect(entry?.encryptionMethod).toBe("aes");
+    expect(entry?.rawCompressionMethod).toBe(99);
+    expect(entry?.compressionMethod).toBe(0);
+    expect(new TextDecoder().decode(await archive.readEntry(entry!, {
+      checkCrc: true,
+      password: "open-sesame",
+    }))).toBe("aes secret\n");
+    expect(await readStreamText(archive.streamEntry(entry!, {
+      checkCrc: true,
+      chunkSize: 7,
+      password: "open-sesame",
+    }))).toBe("aes secret\n");
+    await expect(archive.readEntry(entry!, { checkCrc: true })).rejects.toThrow(
+      "requires a password",
+    );
+    await expect(archive.readEntry(entry!, {
+      checkCrc: true,
+      password: "wrong",
+    })).rejects.toThrow("wrong AES ZIP password");
+  });
+
+  test("reads WinZip AES entries across multiple CTR blocks", async () => {
+    const archive = ZipArchive.fromBuffer(aesLongZipFixture(), "long-aes.zip");
+    const [entry] = await archive.entries();
+    const expected = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n";
+
+    expect(entry?.path).toBe("long.txt");
+    expect((entry?.compressedSize ?? 0) - 16 - 2 - 10).toBeGreaterThan(16);
+    expect(new TextDecoder().decode(await archive.readEntry(entry!, {
+      checkCrc: true,
+      password: "open-sesame",
+    }))).toBe(expected);
+    expect(await readStreamText(archive.streamEntry(entry!, {
+      checkCrc: true,
+      chunkSize: 9,
+      password: "open-sesame",
+    }))).toBe(expected);
   });
 
   test("refuses zip slip names while listing", async () => {

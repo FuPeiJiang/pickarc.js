@@ -21,7 +21,10 @@ interface StatJson {
   archive: string;
   kind: "file" | "directory";
   compressionMethod: number | undefined;
+  rawCompressionMethod: number | undefined;
   compressionName: string;
+  encrypted: boolean;
+  encryptionMethod: "none" | "zipcrypto" | "aes";
   compressedSize: number;
   uncompressedSize: number;
   crc32: string | undefined;
@@ -321,7 +324,10 @@ function candidateToStatJson(candidate: PathCandidate): StatJson {
     archive: candidate.archiveLabel,
     kind: candidate.kind,
     compressionMethod: candidate.compressionMethod,
+    rawCompressionMethod: candidate.rawCompressionMethod,
     compressionName: compressionName(candidate.compressionMethod),
+    encrypted: candidate.encrypted,
+    encryptionMethod: candidate.encryptionMethod,
     compressedSize: candidate.kind === "file" ? candidate.compressedSize : 0,
     uncompressedSize: candidate.kind === "file" ? candidate.uncompressedSize : 0,
     crc32: formatCrc32(candidate.crc32),
@@ -371,12 +377,13 @@ function printStatTable(candidates: readonly PathCandidate[], rawBytes: boolean)
       formatSize(candidate.kind === "file" ? candidate.uncompressedSize : 0, rawBytes),
       formatSize(candidate.kind === "file" ? candidate.compressedSize : 0, rawBytes),
       compressionName(candidate.compressionMethod),
+      candidate.encrypted ? candidate.encryptionMethod : "none",
       candidate.kind,
       candidate.path,
     ]);
   }
 
-  printTable(["uncompressed", "compressed", "method", "kind", "path"], rows);
+  printTable(["uncompressed", "compressed", "method", "encrypted", "kind", "path"], rows);
 }
 
 function printTable(headers: readonly string[], rows: readonly string[][]): void {

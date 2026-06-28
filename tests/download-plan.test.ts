@@ -97,12 +97,15 @@ function candidate(
     path,
     kind,
     compressionMethod: 0,
+    rawCompressionMethod: 0,
     crc32: 0,
     compressedSize: 0,
     uncompressedSize: 0,
     physicalOffset,
     absoluteFromReplace: false,
     isSymlink: false,
+    encrypted: false,
+    encryptionMethod: "none",
     readData: async () => new Uint8Array(),
     streamData: async function* () {
       yield new Uint8Array();

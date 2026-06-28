@@ -4,6 +4,14 @@ import { Crc32 } from "./crc32.ts";
 import { fail } from "./errors.ts";
 import { BufferRangeSource, SubRangeSource, type RangeSource } from "./range-source.ts";
 import { normalizeArchivePath } from "./path-utils.ts";
+import {
+  decryptCompressedChunks,
+  decryptCompressedData,
+  entryHasCrc32,
+  readAesExtra,
+  type ZipAesExtra,
+  type ZipEncryptionMethod,
+} from "./zip-encryption.ts";
 
 const eocdSignature = 0x06054b50;
 const zip64EocdSignature = 0x06064b50;
@@ -20,7 +28,10 @@ export interface ZipEntry {
   readonly path: string;
   readonly rawPath: string;
   readonly flags: number;
+  readonly versionNeeded: number;
+  readonly lastModTime: number;
   readonly compressionMethod: number;
+  readonly rawCompressionMethod: number;
   readonly crc32: number;
   readonly compressedSize: number;
   readonly uncompressedSize: number;
@@ -30,10 +41,14 @@ export interface ZipEntry {
   readonly externalAttributes: number;
   readonly kind: "file" | "directory";
   readonly isSymlink: boolean;
+  readonly encrypted: boolean;
+  readonly encryptionMethod: ZipEncryptionMethod;
+  readonly aesExtra: ZipAesExtra | undefined;
 }
 
 export interface ReadEntryOptions {
   checkCrc: boolean;
+  password?: string | undefined;
 }
 
 export interface StreamEntryOptions extends ReadEntryOptions {
@@ -86,8 +101,10 @@ export class ZipArchive {
         fail(`${this.label}: invalid central directory entry`);
       }
 
+      const versionNeeded = view.getUint16(cursor + 6, true);
       const flags = view.getUint16(cursor + 8, true);
-      const compressionMethod = view.getUint16(cursor + 10, true);
+      const rawCompressionMethod = view.getUint16(cursor + 10, true);
+      const lastModTime = view.getUint16(cursor + 12, true);
       const expectedCrc32 = view.getUint32(cursor + 16, true);
       const compressedSize32 = view.getUint32(cursor + 20, true);
       const uncompressedSize32 = view.getUint32(cursor + 24, true);
@@ -117,6 +134,11 @@ export class ZipArchive {
         uncompressedSize32,
         localHeaderOffset32,
       });
+      const aesExtra = readAesExtra(extra);
+      const encrypted = (flags & 1) !== 0;
+      const encryptionMethod = readEncryptionMethod(path, flags, rawCompressionMethod, aesExtra);
+      const compressionMethod =
+        encryptionMethod === "aes" ? aesExtra!.compressionMethod : rawCompressionMethod;
       const compressedSize = zip64.compressedSize;
       const uncompressedSize = zip64.uncompressedSize;
       const localHeaderOffset = zip64.localHeaderOffset;
@@ -131,7 +153,10 @@ export class ZipArchive {
         path,
         rawPath,
         flags,
+        versionNeeded,
+        lastModTime,
         compressionMethod,
+        rawCompressionMethod,
         crc32: expectedCrc32,
         compressedSize,
         uncompressedSize,
@@ -141,6 +166,9 @@ export class ZipArchive {
         externalAttributes,
         kind,
         isSymlink,
+        encrypted,
+        encryptionMethod,
+        aesExtra,
       });
 
       cursor = variableEnd;
@@ -151,12 +179,12 @@ export class ZipArchive {
   }
 
   async readEntry(entry: ZipEntry, options: ReadEntryOptions): Promise<Uint8Array> {
-    if ((entry.flags & 1) !== 0) {
-      fail(`${entry.path}: encrypted ZIP entries are not supported`);
-    }
-
     const { offset } = await this.entryDataRange(entry);
-    const compressed = await this.#source.read(offset, entry.compressedSize);
+    const compressed = decryptCompressedData(
+      entry,
+      await this.#source.read(offset, entry.compressedSize),
+      options.password,
+    );
     let data: Uint8Array;
 
     switch (entry.compressionMethod) {
@@ -176,7 +204,7 @@ export class ZipArchive {
       fail(`${entry.path}: uncompressed size mismatch`);
     }
 
-    if (options.checkCrc) {
+    if (options.checkCrc && entryHasCrc32(entry)) {
       const actual = new Crc32().update(data).digest();
 
       if (actual !== entry.crc32) {
@@ -188,21 +216,22 @@ export class ZipArchive {
   }
 
   async *streamEntry(entry: ZipEntry, options: StreamEntryOptions): AsyncGenerator<Uint8Array> {
-    if ((entry.flags & 1) !== 0) {
-      fail(`${entry.path}: encrypted ZIP entries are not supported`);
-    }
-
     const { offset: dataOffset } = await this.entryDataRange(entry);
     const chunkSize = options.chunkSize ?? 1024 * 1024;
+    const compressedChunks = decryptCompressedChunks(
+      entry,
+      this.readStoredChunks(dataOffset, entry.compressedSize, chunkSize),
+      options.password,
+    );
     const crc = new Crc32();
     let uncompressedBytes = 0;
 
     switch (entry.compressionMethod) {
       case 0: {
-        for await (const chunk of this.readStoredChunks(dataOffset, entry.compressedSize, chunkSize)) {
+        for await (const chunk of compressedChunks) {
           uncompressedBytes += chunk.byteLength;
 
-          if (options.checkCrc) {
+          if (options.checkCrc && entryHasCrc32(entry)) {
             crc.update(chunk);
           }
 
@@ -213,7 +242,6 @@ export class ZipArchive {
       }
 
       case 8: {
-        const compressedChunks = this.readStoredChunks(dataOffset, entry.compressedSize, chunkSize);
         const stream = Readable.from(compressedChunks).pipe(createInflateRaw());
 
         for await (const output of stream) {
@@ -224,7 +252,7 @@ export class ZipArchive {
             fail(`${entry.path}: uncompressed size mismatch`);
           }
 
-          if (options.checkCrc) {
+          if (options.checkCrc && entryHasCrc32(entry)) {
             crc.update(chunk);
           }
 
@@ -242,7 +270,7 @@ export class ZipArchive {
       fail(`${entry.path}: uncompressed size mismatch`);
     }
 
-    if (options.checkCrc) {
+    if (options.checkCrc && entryHasCrc32(entry)) {
       const actual = crc.digest();
 
       if (actual !== entry.crc32) {
@@ -271,8 +299,8 @@ export class ZipArchive {
   }
 
   async openStoredEntryAsArchive(entry: ZipEntry, label: string): Promise<ZipArchive> {
-    if ((entry.flags & 1) !== 0) {
-      fail(`${entry.path}: encrypted ZIP entries are not supported`);
+    if (entry.encrypted) {
+      fail(`${entry.path}: encrypted nested ZIP entries are not supported`);
     }
 
     if (entry.compressionMethod !== 0) {
@@ -416,6 +444,37 @@ function asUint8Array(value: unknown): Uint8Array {
   }
 
   fail(`zlib stream produced an unsupported chunk`);
+}
+
+function readEncryptionMethod(
+  path: string,
+  flags: number,
+  rawCompressionMethod: number,
+  aesExtra: ZipAesExtra | undefined,
+): ZipEncryptionMethod {
+  const encrypted = (flags & 1) !== 0;
+
+  if (!encrypted) {
+    if (rawCompressionMethod === 99) {
+      fail(`${path}: AES ZIP entry is missing the encryption flag`);
+    }
+
+    return "none";
+  }
+
+  if (rawCompressionMethod === 99) {
+    if (aesExtra === undefined) {
+      fail(`${path}: AES ZIP entry is missing the 0x9901 extra field`);
+    }
+
+    return "aes";
+  }
+
+  if ((flags & 0x0040) !== 0) {
+    fail(`${path}: PKWARE strong encryption is not supported`);
+  }
+
+  return "zipcrypto";
 }
 
 function readZip64Extra(

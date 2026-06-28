@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { makeZip } from "./zip-fixtures.ts";
+import { aesZipFixture, makeZip, zipCryptoFixture } from "./zip-fixtures.ts";
 
 const cliPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../src/cli.ts");
 const tempDirs: string[] = [];
@@ -58,6 +58,59 @@ describe("pickarc commands", () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe("bravo");
+  });
+
+  test("cat reads encrypted entries with password env sources", async () => {
+    const directory = await makeTempDir();
+    const archive = await writeBytes(directory, "legacy.zip", zipCryptoFixture());
+
+    const result = await runPickarc(["cat", "--password-env", "PICKARC_PASSWORD", archive], directory, {
+      PICKARC_PASSWORD: "swordfish",
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("legacy secret\n");
+  });
+
+  test("cp reads encrypted entries with final-path password rules", async () => {
+    const directory = await makeTempDir();
+    const passwordFile = path.join(directory, "password.txt");
+    const archive = await writeBytes(directory, "aes.zip", aesZipFixture());
+    await writeFile(passwordFile, "open-sesame\n");
+
+    const result = await runPickarc(
+      [
+        "cp",
+        "--password-file-for-glob",
+        "out/*.txt",
+        passwordFile,
+        "--replace",
+        "^(.*)$",
+        "out/$1",
+        archive,
+      ],
+      directory,
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(await readText(path.join(directory, "out/aes.txt"))).toBe("aes secret\n");
+  });
+
+  test("stat reports encrypted entry metadata", async () => {
+    const directory = await makeTempDir();
+    const archive = await writeBytes(directory, "aes.zip", aesZipFixture());
+
+    const result = await runPickarc(["stat", "--json", archive], directory);
+    const entries = JSON.parse(result.stdout);
+
+    expect(result.exitCode).toBe(0);
+    expect(entries[0]).toMatchObject({
+      path: "aes.txt",
+      encrypted: true,
+      encryptionMethod: "aes",
+      rawCompressionMethod: 99,
+      compressionMethod: 0,
+    });
   });
 
   test("ls supports glob include OR groups", async () => {
@@ -349,6 +402,12 @@ async function writeZip(
 ): Promise<string> {
   const archive = path.join(directory, name);
   await Bun.write(archive, makeZip(entries));
+  return archive;
+}
+
+async function writeBytes(directory: string, name: string, bytes: Uint8Array): Promise<string> {
+  const archive = path.join(directory, name);
+  await Bun.write(archive, bytes);
   return archive;
 }
 
