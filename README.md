@@ -298,6 +298,10 @@ Without `--as-dir-keep-ext`, `nested.zip/file.txt` is listed as `nested/file.txt
 
 Encrypted nested ZIP entries are refused for `--as-dir`. Supporting them without buffering the whole nested archive needs a seekable encrypted range source and authentication policy.
 
+## License
+
+pickarc is licensed under either Apache-2.0 or GPL-2.0-only, at your option.
+
 ## Development
 
 ```sh
