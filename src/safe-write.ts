@@ -17,15 +17,11 @@ let nativeSpecialLibrary: unknown;
 
 export interface ResolvedOutputPath {
   target: string;
-  lockdownRoot: string | undefined;
 }
 
-export interface SafeWriteResult {
-  createdDirectories: string[];
-}
-
-export interface CreateDirectoryResult extends SafeWriteResult {
+export interface EnsuredDirectory {
   target: string;
+  created: boolean;
 }
 
 interface NativeSpecialSymbols {
@@ -37,37 +33,243 @@ interface NativeSpecialSymbols {
   chmod: (path: number, mode: number) => number;
 }
 
-export async function resolveOutputPath(
-  finalPath: string,
-  lockdown: string | undefined,
-): Promise<ResolvedOutputPath> {
-  if (windowsAbsolutePath.test(finalPath) && process.platform !== "win32") {
-    fail(`${finalPath}: Windows absolute output paths are not writable on this platform`);
+interface DirectoryNode {
+  segment: string;
+  target: string;
+  depth: number;
+  children: DirectoryNode[];
+  childMap: Map<string, DirectoryNode> | undefined;
+  pending: Promise<void> | undefined;
+  ready: boolean;
+  createdByUs: boolean;
+  explicitMode: number | undefined;
+}
+
+const childMapThreshold = 64;
+
+export class DirectoryEnsurer {
+  private readonly lockdownRoot: string | undefined;
+  private readonly roots: DirectoryNode[] = [];
+  private rootMap: Map<string, DirectoryNode> | undefined = undefined;
+  private readonly createdBuckets: DirectoryNode[][] = [];
+
+  private constructor(lockdownRoot: string | undefined) {
+    this.lockdownRoot = lockdownRoot;
   }
 
-  const target = path.isAbsolute(finalPath)
-    ? path.resolve(finalPath)
-    : path.resolve(process.cwd(), finalPath);
-  const lockdownRoot = lockdown === undefined ? undefined : await resolveLockdownRoot(lockdown);
-
-  if (lockdownRoot !== undefined && !isWithin(lockdownRoot, target)) {
-    fail(`${finalPath}: output path escapes lockdown root ${lockdownRoot}`);
+  static async create(lockdown: string | undefined): Promise<DirectoryEnsurer> {
+    return new DirectoryEnsurer(
+      lockdown === undefined ? undefined : await resolveLockdownRoot(lockdown),
+    );
   }
 
-  return {
-    target,
-    lockdownRoot,
-  };
+  resolve(finalPath: string): ResolvedOutputPath {
+    if (windowsAbsolutePath.test(finalPath) && process.platform !== "win32") {
+      fail(`${finalPath}: Windows absolute output paths are not writable on this platform`);
+    }
+
+    const target = path.isAbsolute(finalPath)
+      ? path.resolve(finalPath)
+      : path.resolve(process.cwd(), finalPath);
+
+    if (this.lockdownRoot !== undefined && !isWithin(this.lockdownRoot, target)) {
+      fail(`${finalPath}: output path escapes lockdown root ${this.lockdownRoot}`);
+    }
+
+    return {
+      target,
+    };
+  }
+
+  async ensureParent(target: string): Promise<void> {
+    await this.ensureDirectory(path.dirname(target));
+  }
+
+  async ensureFinalDirectory(finalPath: string): Promise<EnsuredDirectory> {
+    const { target } = this.resolve(finalPath);
+    const node = await this.ensureDirectory(target);
+
+    return {
+      target,
+      created: node?.createdByUs === true,
+    };
+  }
+
+  noteExplicitDirectoryMode(target: string, mode: number, fallbackMode: number): void {
+    if (mode === fallbackMode) {
+      return;
+    }
+
+    const node = this.findNode(target);
+
+    if (node?.createdByUs === true) {
+      node.explicitMode = mode;
+    }
+  }
+
+  async applyCreatedDirectoryModes(fallbackMode: number): Promise<void> {
+    for (let depth = this.createdBuckets.length - 1; depth >= 0; depth -= 1) {
+      const bucket = this.createdBuckets[depth];
+
+      if (bucket === undefined) {
+        continue;
+      }
+
+      for (let index = 0; index < bucket.length; index += 1) {
+        const node = bucket[index]!;
+        await chmodCreatedDirectory(node.target, node.explicitMode ?? fallbackMode);
+      }
+    }
+  }
+
+  private async ensureDirectory(directory: string): Promise<DirectoryNode | undefined> {
+    if (this.lockdownRoot !== undefined && !isWithin(this.lockdownRoot, directory)) {
+      fail(`${directory}: directory escapes lockdown root ${this.lockdownRoot}`);
+    }
+
+    const root = path.parse(directory).root;
+    const relative = path.relative(root, directory);
+
+    if (relative === "") {
+      return undefined;
+    }
+
+    let parent = this.rootNode(root);
+    let current = root;
+    const parts = relative.split(path.sep);
+
+    for (let index = 0; index < parts.length; index += 1) {
+      const segment = parts[index]!;
+
+      if (segment === "") {
+        continue;
+      }
+
+      current = path.join(current, segment);
+      parent = childNode(parent, segment, current, index + 1);
+      await this.ensureNode(parent);
+    }
+
+    return parent;
+  }
+
+  private async ensureNode(node: DirectoryNode): Promise<void> {
+    if (node.ready) {
+      return;
+    }
+
+    if (node.pending !== undefined) {
+      await node.pending;
+      return;
+    }
+
+    node.pending = this.mkdirOrValidate(node);
+    await node.pending;
+  }
+
+  private async mkdirOrValidate(node: DirectoryNode): Promise<void> {
+    try {
+      await mkdir(node.target, { mode: initialDirectoryMode });
+      node.createdByUs = true;
+      node.ready = true;
+      this.rememberCreatedNode(node);
+      return;
+    } catch (error) {
+      if (!isAlreadyExists(error)) {
+        throw error;
+      }
+    }
+
+    const info = await lstat(node.target);
+
+    if (info.isSymbolicLink()) {
+      fail(`${node.target}: refused symlinked parent directory`);
+    }
+
+    if (!info.isDirectory()) {
+      fail(`${node.target}: expected a directory`);
+    }
+
+    node.createdByUs = false;
+    node.ready = true;
+  }
+
+  private rememberCreatedNode(node: DirectoryNode): void {
+    let bucket = this.createdBuckets[node.depth];
+
+    if (bucket === undefined) {
+      bucket = [];
+      this.createdBuckets[node.depth] = bucket;
+    }
+
+    bucket.push(node);
+  }
+
+  private rootNode(root: string): DirectoryNode {
+    const existing = lookupNode(this.roots, this.rootMap, root);
+
+    if (existing !== undefined) {
+      return existing;
+    }
+
+    const node = newDirectoryNode(root, root, 0);
+    node.ready = true;
+    this.roots.push(node);
+
+    if (this.rootMap !== undefined) {
+      this.rootMap.set(root, node);
+    } else if (this.roots.length >= childMapThreshold) {
+      this.rootMap = nodesBySegment(this.roots);
+    }
+
+    return node;
+  }
+
+  private findNode(target: string): DirectoryNode | undefined {
+    const root = path.parse(target).root;
+    const rootNode = lookupNode(this.roots, this.rootMap, root);
+
+    if (rootNode === undefined) {
+      return undefined;
+    }
+
+    const relative = path.relative(root, target);
+
+    if (relative === "") {
+      return undefined;
+    }
+
+    let node = rootNode;
+    const parts = relative.split(path.sep);
+
+    for (let index = 0; index < parts.length; index += 1) {
+      const segment = parts[index]!;
+
+      if (segment === "") {
+        continue;
+      }
+
+      const child = lookupNode(node.children, node.childMap, segment);
+
+      if (child === undefined) {
+        return undefined;
+      }
+
+      node = child;
+    }
+
+    return node;
+  }
 }
 
 export async function writeFileExclusive(
   finalPath: string,
   data: Uint8Array,
-  lockdown: string | undefined,
+  output: DirectoryEnsurer,
   mode: number,
-): Promise<SafeWriteResult> {
-  const { target, lockdownRoot } = await resolveOutputPath(finalPath, lockdown);
-  const createdDirectories = await ensureDirectory(path.dirname(target), lockdownRoot);
+): Promise<void> {
+  const { target } = output.resolve(finalPath);
+  await output.ensureParent(target);
 
   let handle;
 
@@ -87,21 +289,17 @@ export async function writeFileExclusive(
   } finally {
     await handle.close();
   }
-
-  return {
-    createdDirectories,
-  };
 }
 
 export async function writeFileExclusiveStream(
   finalPath: string,
   chunks: AsyncIterable<Uint8Array>,
-  lockdown: string | undefined,
+  output: DirectoryEnsurer,
   mode: number,
   onChunk?: (bytes: number) => void,
-): Promise<SafeWriteResult> {
-  const { target, lockdownRoot } = await resolveOutputPath(finalPath, lockdown);
-  const createdDirectories = await ensureDirectory(path.dirname(target), lockdownRoot);
+): Promise<void> {
+  const { target } = output.resolve(finalPath);
+  await output.ensureParent(target);
 
   let handle;
   let completed = false;
@@ -131,31 +329,16 @@ export async function writeFileExclusiveStream(
       await unlink(target).catch(() => undefined);
     }
   }
-
-  return {
-    createdDirectories,
-  };
-}
-
-export async function createDirectory(
-  finalPath: string,
-  lockdown: string | undefined,
-): Promise<CreateDirectoryResult> {
-  const { target, lockdownRoot } = await resolveOutputPath(finalPath, lockdown);
-  return {
-    target,
-    createdDirectories: await ensureDirectory(target, lockdownRoot),
-  };
 }
 
 export async function createSymlinkExclusive(
   finalPath: string,
   targetBytes: Uint8Array,
-  lockdown: string | undefined,
-): Promise<SafeWriteResult> {
-  const { target, lockdownRoot } = await resolveOutputPath(finalPath, lockdown);
+  output: DirectoryEnsurer,
+): Promise<void> {
+  const { target } = output.resolve(finalPath);
   assertPosixSpecialFileSupport(target, "symlink");
-  const createdDirectories = await ensureDirectory(path.dirname(target), lockdownRoot);
+  await output.ensureParent(target);
   const linkTarget = decodeSymlinkTarget(target, targetBytes);
 
   try {
@@ -163,20 +346,16 @@ export async function createSymlinkExclusive(
   } catch (error) {
     failOpen(target, error);
   }
-
-  return {
-    createdDirectories,
-  };
 }
 
 export async function createFifoExclusive(
   finalPath: string,
-  lockdown: string | undefined,
+  output: DirectoryEnsurer,
   mode: number,
-): Promise<SafeWriteResult> {
-  const { target, lockdownRoot } = await resolveOutputPath(finalPath, lockdown);
+): Promise<void> {
+  const { target } = output.resolve(finalPath);
   assertPosixSpecialFileSupport(target, "FIFO");
-  const createdDirectories = await ensureDirectory(path.dirname(target), lockdownRoot);
+  await output.ensureParent(target);
   await assertMissingTarget(target);
   const pathBytes = cPath(target);
   const result = specialNativeSymbols().mkfifo(ptr(pathBytes), initialFileMode);
@@ -187,21 +366,18 @@ export async function createFifoExclusive(
 
   await assertSpecialPathType(target, "FIFO", (info) => info.isFIFO());
   await chmodSpecialPath(target, mode);
-  return {
-    createdDirectories,
-  };
 }
 
 export async function createDeviceExclusive(
   finalPath: string,
-  lockdown: string | undefined,
+  output: DirectoryEnsurer,
   mode: number,
   deviceType: "char-device" | "block-device",
   deviceNumbers: DeviceNumbers,
-): Promise<SafeWriteResult> {
-  const { target, lockdownRoot } = await resolveOutputPath(finalPath, lockdown);
+): Promise<void> {
+  const { target } = output.resolve(finalPath);
   assertPosixSpecialFileSupport(target, deviceType);
-  const createdDirectories = await ensureDirectory(path.dirname(target), lockdownRoot);
+  await output.ensureParent(target);
   await assertMissingTarget(target);
   const pathBytes = cPath(target);
   const fileTypeMode = deviceType === "char-device" ? 0o020000 : 0o060000;
@@ -223,19 +399,16 @@ export async function createDeviceExclusive(
       : (info) => info.isBlockDevice(),
   );
   await chmodSpecialPath(target, mode);
-  return {
-    createdDirectories,
-  };
 }
 
 export async function createSocketExclusive(
   finalPath: string,
-  lockdown: string | undefined,
+  output: DirectoryEnsurer,
   mode: number,
-): Promise<SafeWriteResult> {
-  const { target, lockdownRoot } = await resolveOutputPath(finalPath, lockdown);
+): Promise<void> {
+  const { target } = output.resolve(finalPath);
   assertPosixSpecialFileSupport(target, "socket");
-  const createdDirectories = await ensureDirectory(path.dirname(target), lockdownRoot);
+  await output.ensureParent(target);
   await assertMissingTarget(target);
   const native = specialNativeSymbols();
   const fd = native.socket(1, 1, 0);
@@ -265,9 +438,6 @@ export async function createSocketExclusive(
 
   await assertSpecialPathType(target, "socket", (info) => info.isSocket());
   await chmodSpecialPath(target, mode);
-  return {
-    createdDirectories,
-  };
 }
 
 export async function chmodCreatedDirectory(target: string, mode: number): Promise<void> {
@@ -322,60 +492,78 @@ async function resolveLockdownRoot(lockdown: string): Promise<string> {
   return root;
 }
 
-async function ensureDirectory(directory: string, lockdownRoot: string | undefined): Promise<string[]> {
-  if (lockdownRoot !== undefined && !isWithin(lockdownRoot, directory)) {
-    fail(`${directory}: directory escapes lockdown root ${lockdownRoot}`);
-  }
-
-  const createdDirectories: string[] = [];
-  const root = path.parse(directory).root;
-  const relative = path.relative(root, directory);
-  let current = root;
-
-  if (relative === "") {
-    return createdDirectories;
-  }
-
-  for (const part of relative.split(path.sep)) {
-    current = path.join(current, part);
-
-    try {
-      const info = await lstat(current);
-
-      if (info.isSymbolicLink()) {
-        fail(`${current}: refused symlinked parent directory`);
-      }
-
-      if (!info.isDirectory()) {
-        fail(`${current}: expected a directory`);
-      }
-    } catch (error) {
-      if (isNotFound(error)) {
-        await mkdir(current, { mode: initialDirectoryMode }).catch((mkdirError: unknown) => {
-          if (!isAlreadyExists(mkdirError)) {
-            throw mkdirError;
-          }
-        });
-        const info = await lstat(current);
-
-        if (info.isSymbolicLink() || !info.isDirectory()) {
-          fail(`${current}: failed to create safe directory`);
-        }
-
-        createdDirectories.push(current);
-        continue;
-      }
-
-      throw error;
-    }
-  }
-
-  return createdDirectories;
-}
-
 function isWithin(root: string, target: string): boolean {
   const relative = path.relative(root, target);
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function newDirectoryNode(segment: string, target: string, depth: number): DirectoryNode {
+  return {
+    segment,
+    target,
+    depth,
+    children: [],
+    childMap: undefined,
+    pending: undefined,
+    ready: false,
+    createdByUs: false,
+    explicitMode: undefined,
+  };
+}
+
+function childNode(
+  parent: DirectoryNode,
+  segment: string,
+  target: string,
+  depth: number,
+): DirectoryNode {
+  const existing = lookupNode(parent.children, parent.childMap, segment);
+
+  if (existing !== undefined) {
+    return existing;
+  }
+
+  const node = newDirectoryNode(segment, target, depth);
+  parent.children.push(node);
+
+  if (parent.childMap !== undefined) {
+    parent.childMap.set(segment, node);
+  } else if (parent.children.length >= childMapThreshold) {
+    parent.childMap = nodesBySegment(parent.children);
+  }
+
+  return node;
+}
+
+function lookupNode(
+  nodes: readonly DirectoryNode[],
+  nodeMap: Map<string, DirectoryNode> | undefined,
+  segment: string,
+): DirectoryNode | undefined {
+  if (nodeMap !== undefined) {
+    return nodeMap.get(segment);
+  }
+
+  for (let index = 0; index < nodes.length; index += 1) {
+    const node = nodes[index]!;
+
+    if (node.segment === segment) {
+      return node;
+    }
+  }
+
+  return undefined;
+}
+
+function nodesBySegment(nodes: readonly DirectoryNode[]): Map<string, DirectoryNode> {
+  const nodeMap = new Map<string, DirectoryNode>();
+
+  for (let index = 0; index < nodes.length; index += 1) {
+    const node = nodes[index]!;
+    nodeMap.set(node.segment, node);
+  }
+
+  return nodeMap;
 }
 
 function failOpen(target: string, error: unknown): never {

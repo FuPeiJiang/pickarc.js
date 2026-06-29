@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+  chmod,
   lstat,
   mkdir,
   mkdtemp,
@@ -8,6 +9,7 @@ import {
   realpath,
   rm,
   stat,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -479,6 +481,48 @@ describe("pickarc commands", () => {
     expect(preserved.exitCode).toBe(0);
     expect(await modeOf(path.join(directory, "dropped/sticky"))).toBe(0o777);
     expect(await modeOf(path.join(directory, "preserved/sticky"))).toBe(0o1777);
+  });
+
+  test("cp leaves pre-existing explicit directories unchanged", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const directory = await makeTempDir();
+    const existing = path.join(directory, "existing");
+    await mkdir(existing);
+    await chmod(existing, 0o700);
+    const archive = await writeZip(directory, "fixture.zip", [
+      { path: "existing/", externalAttributes: 0o040777 << 16 },
+      { path: "existing/file.txt", data: "body", externalAttributes: 0o100644 << 16 },
+    ]);
+
+    const result = await runPickarc(["cp", "--permissions", "preserve", archive], directory);
+
+    expectExitCode(result, 0);
+    expect(await modeOf(existing)).toBe(0o700);
+    expect(await readText(path.join(existing, "file.txt"))).toBe("body");
+  });
+
+  test("cp refuses symlinked parent directories", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const directory = await makeTempDir();
+    const escape = path.join(directory, "escape");
+    await mkdir(escape);
+    await mkdir(path.join(directory, "out"));
+    await symlink(escape, path.join(directory, "out/link"), "dir");
+    const archive = await writeZip(directory, "fixture.zip", [
+      { path: "out/link/file.txt", data: "body" },
+    ]);
+
+    const result = await runPickarc(["cp", archive], directory);
+
+    expectExitCode(result, 1);
+    expect(result.stderr).toContain("refused symlinked parent directory");
+    await expect(stat(path.join(escape, "file.txt"))).rejects.toThrow();
   });
 
   test("cp can render forced progress with bold labels and cyan bars", async () => {
