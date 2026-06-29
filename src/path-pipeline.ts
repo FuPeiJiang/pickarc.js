@@ -64,7 +64,9 @@ export interface PathCandidate {
   planRange: () => { offset: number; length: number } | undefined;
   dataRange: () => Promise<{ offset: number; length: number } | undefined>;
   primeRange: (offset: number, length: number) => Promise<void>;
-  expandAsDirectory?: (candidate: PathCandidate, keepExtension: boolean) => Promise<PathCandidate[]>;
+  expandAsDirectory:
+    | ((candidate: PathCandidate, keepExtension: boolean) => Promise<PathCandidate[]>)
+    | undefined;
 }
 
 export type ExpandAsDir = (
@@ -80,7 +82,7 @@ export async function applyPathOperations(
   let candidates: PathCandidate[] = new Array(input.length);
 
   for (let index = 0; index < input.length; index += 1) {
-    candidates[index] = { ...input[index]! };
+    candidates[index] = cloneCandidate(input[index]!);
   }
 
   for (const operation of operations) {
@@ -124,13 +126,12 @@ export async function applyPathOperations(
           const replaced = candidate.path.replace(operation.regex, operation.replacement);
           const normalized = normalizeVirtualPath(replaced, "--replace");
 
-          next[index] = {
-            ...candidate,
-            path: normalized,
-            absoluteFromReplace:
-              candidate.absoluteFromReplace ||
+          next[index] = cloneCandidate(
+            candidate,
+            normalized,
+            candidate.absoluteFromReplace ||
               (normalized !== candidate.path && isAbsoluteLikePath(normalized)),
-          };
+          );
         }
 
         candidates = next;
@@ -145,10 +146,7 @@ export async function applyPathOperations(
           const stripped = stripLeadingComponents(candidate.path, operation.count);
 
           if (stripped !== undefined) {
-            next.push({
-              ...candidate,
-              path: stripped,
-            });
+            next.push(cloneCandidate(candidate, stripped));
           }
         }
 
@@ -161,10 +159,7 @@ export async function applyPathOperations(
 
         for (let index = 0; index < candidates.length; index += 1) {
           const candidate = candidates[index]!;
-          next[index] = {
-            ...candidate,
-            path: basenameOfVirtualPath(candidate.path),
-          };
+          next[index] = cloneCandidate(candidate, basenameOfVirtualPath(candidate.path));
         }
 
         candidates = next;
@@ -205,10 +200,7 @@ export function sortAndValidateFinalPaths(input: readonly PathCandidate[]): Path
     const normalized = normalizeVirtualPath(candidate.path, "final path");
     assertUsableFinalPath(normalized, candidate.absoluteFromReplace);
 
-    candidates[index] = {
-      ...candidate,
-      path: normalized,
-    };
+    candidates[index] = cloneCandidate(candidate, normalized);
   }
 
   candidates.sort((left, right) => {
@@ -226,6 +218,40 @@ export function sortAndValidateFinalPaths(input: readonly PathCandidate[]): Path
   }
 
   return candidates;
+}
+
+function cloneCandidate(
+  candidate: PathCandidate,
+  path = candidate.path,
+  absoluteFromReplace = candidate.absoluteFromReplace,
+): PathCandidate {
+  return {
+    id: candidate.id,
+    archiveLabel: candidate.archiveLabel,
+    sourcePath: candidate.sourcePath,
+    path,
+    kind: candidate.kind,
+    compressionMethod: candidate.compressionMethod,
+    rawCompressionMethod: candidate.rawCompressionMethod,
+    crc32: candidate.crc32,
+    compressedSize: candidate.compressedSize,
+    uncompressedSize: candidate.uncompressedSize,
+    physicalOffset: candidate.physicalOffset,
+    absoluteFromReplace,
+    unixMode: candidate.unixMode,
+    specialFileType: candidate.specialFileType,
+    deviceNumbers: candidate.deviceNumbers,
+    isSymlink: candidate.isSymlink,
+    isSpecialFile: candidate.isSpecialFile,
+    encrypted: candidate.encrypted,
+    encryptionMethod: candidate.encryptionMethod,
+    readData: candidate.readData,
+    streamData: candidate.streamData,
+    planRange: candidate.planRange,
+    dataRange: candidate.dataRange,
+    primeRange: candidate.primeRange,
+    expandAsDirectory: candidate.expandAsDirectory,
+  };
 }
 
 export async function prepareFinalCandidates(

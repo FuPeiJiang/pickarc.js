@@ -343,5 +343,6 @@ function candidate(path: string): PathCandidate {
     planRange: () => undefined,
     dataRange: async () => undefined,
     primeRange: async (_offset, _length) => {},
+    expandAsDirectory: undefined,
   };
 }

@@ -120,5 +120,6 @@ function candidate(
       return planRange;
     },
     primeRange: async () => {},
+    expandAsDirectory: undefined,
   };
 }
