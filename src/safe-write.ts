@@ -1,11 +1,13 @@
 import { constants } from "node:fs";
 import { lstat, mkdir, open, unlink } from "node:fs/promises";
 import path from "node:path";
+import { dlopen, FFIType } from "bun:ffi";
 import { fail } from "./errors.ts";
 
 const windowsAbsolutePath = /^[A-Za-z]:\//;
 const initialFileMode = 0o600;
 const initialDirectoryMode = 0o700;
+let linuxFchmod: ((fd: number, mode: number) => number) | undefined;
 
 export interface ResolvedOutputPath {
   target: string;
@@ -289,17 +291,24 @@ async function chmodOpenHandle(
     return;
   }
 
-  const fdPath = `/proc/${process.pid}/fd/${handle.fd}`;
-  const child = Bun.spawn(["chmod", mode.toString(8), fdPath], {
-    stderr: "pipe",
-    stdout: "ignore",
-  });
-  const [stderr, exitCode] = await Promise.all([
-    new Response(child.stderr).text(),
-    child.exited,
-  ]);
+  const result = fchmod()(handle.fd, mode);
 
-  if (exitCode !== 0) {
-    fail(`chmod ${mode.toString(8)}: ${stderr.trim() || `exited with code ${exitCode}`}`);
+  if (result !== 0) {
+    fail(`fchmod ${mode.toString(8)} failed with code ${result}`);
   }
+}
+
+function fchmod(): (fd: number, mode: number) => number {
+  if (linuxFchmod !== undefined) {
+    return linuxFchmod;
+  }
+
+  linuxFchmod = dlopen("libc.so.6", {
+    fchmod: {
+      args: [FFIType.i32, FFIType.u32],
+      returns: FFIType.i32,
+    },
+  }).symbols.fchmod as (fd: number, mode: number) => number;
+
+  return linuxFchmod;
 }
