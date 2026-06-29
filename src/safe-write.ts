@@ -7,7 +7,9 @@ import { fail } from "./errors.ts";
 const windowsAbsolutePath = /^[A-Za-z]:\//;
 const initialFileMode = 0o600;
 const initialDirectoryMode = 0o700;
-let linuxFchmod: ((fd: number, mode: number) => number) | undefined;
+let nativeFchmod: ((fd: number, mode: number) => number) | undefined;
+// Keep the dlopen handle alive for the cached native symbol.
+let nativeFchmodLibrary: unknown;
 
 export interface ResolvedOutputPath {
   target: string;
@@ -286,7 +288,7 @@ async function chmodOpenHandle(
     return;
   }
 
-  if (process.platform !== "linux") {
+  if (fchmodLibraryCandidates().length === 0) {
     await handle.chmod(mode);
     return;
   }
@@ -299,16 +301,69 @@ async function chmodOpenHandle(
 }
 
 function fchmod(): (fd: number, mode: number) => number {
-  if (linuxFchmod !== undefined) {
-    return linuxFchmod;
+  if (nativeFchmod !== undefined) {
+    return nativeFchmod;
   }
 
-  linuxFchmod = dlopen("libc.so.6", {
-    fchmod: {
-      args: [FFIType.i32, FFIType.u32],
-      returns: FFIType.i32,
-    },
-  }).symbols.fchmod as (fd: number, mode: number) => number;
+  const candidates = fchmodLibraryCandidates();
+  const errors: string[] = [];
 
-  return linuxFchmod;
+  for (let index = 0; index < candidates.length; index += 1) {
+    const candidate = candidates[index]!;
+
+    try {
+      const library = dlopen(candidate, {
+        fchmod: {
+          args: [FFIType.i32, FFIType.u32],
+          returns: FFIType.i32,
+        },
+      });
+
+      nativeFchmodLibrary = library;
+      nativeFchmod = library.symbols.fchmod as (fd: number, mode: number) => number;
+      return nativeFchmod;
+    } catch (error) {
+      errors.push(`${candidate}: ${String(error)}`);
+    }
+  }
+
+  fail(`failed to load native fchmod: ${errors.join("; ")}`);
+}
+
+export function fchmodLibraryCandidates(
+  platform: NodeJS.Platform = process.platform,
+  arch: NodeJS.Architecture = process.arch,
+): string[] {
+  switch (platform) {
+    case "darwin":
+      return ["libSystem.B.dylib", "libSystem.dylib"];
+
+    case "linux": {
+      const candidates = ["libc.so.6"];
+      const muslLoader = muslLoaderName(arch);
+
+      if (muslLoader !== undefined) {
+        candidates.push(muslLoader);
+      }
+
+      candidates.push("libc.so");
+      return candidates;
+    }
+
+    default:
+      return [];
+  }
+}
+
+function muslLoaderName(arch: NodeJS.Architecture): string | undefined {
+  switch (arch) {
+    case "x64":
+      return "ld-musl-x86_64.so.1";
+
+    case "arm64":
+      return "ld-musl-aarch64.so.1";
+
+    default:
+      return undefined;
+  }
 }
