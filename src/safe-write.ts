@@ -136,6 +136,10 @@ export async function createDirectory(
 }
 
 export async function chmodCreatedDirectory(target: string, mode: number): Promise<void> {
+  if (process.platform === "win32") {
+    return;
+  }
+
   const info = await lstat(target);
 
   if (info.isSymbolicLink()) {
@@ -146,9 +150,7 @@ export async function chmodCreatedDirectory(target: string, mode: number): Promi
     fail(`${target}: expected a directory during chmod`);
   }
 
-  const flags = process.platform === "win32"
-    ? constants.O_RDONLY
-    : constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW;
+  const flags = constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW;
   let handle;
 
   try {

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,7 +43,7 @@ describe("pickarc commands", () => {
       directory,
     );
 
-    expect(result.exitCode).toBe(0);
+    expectExitCode(result, 0);
     expect(result.stdout).toBe("out/a.txt\nout/b.txt\n");
   });
 
@@ -56,7 +56,7 @@ describe("pickarc commands", () => {
 
     const result = await runPickarc(["cat", "--include", "^b\\.txt$", archive], directory);
 
-    expect(result.exitCode).toBe(0);
+    expectExitCode(result, 0);
     expect(result.stdout).toBe("bravo");
   });
 
@@ -68,7 +68,7 @@ describe("pickarc commands", () => {
       PICKARC_PASSWORD: "swordfish",
     });
 
-    expect(result.exitCode).toBe(0);
+    expectExitCode(result, 0);
     expect(result.stdout).toBe("legacy secret\n");
   });
 
@@ -92,7 +92,7 @@ describe("pickarc commands", () => {
       directory,
     );
 
-    expect(result.exitCode).toBe(0);
+    expectExitCode(result, 0);
     expect(await readText(path.join(directory, "out/aes.txt"))).toBe("aes secret\n");
   });
 
@@ -103,7 +103,7 @@ describe("pickarc commands", () => {
     const result = await runPickarc(["stat", "--json", archive], directory);
     const entries = JSON.parse(result.stdout);
 
-    expect(result.exitCode).toBe(0);
+    expectExitCode(result, 0);
     expect(entries[0]).toMatchObject({
       path: "aes.txt",
       encrypted: true,
@@ -136,7 +136,7 @@ describe("pickarc commands", () => {
       directory,
     );
 
-    expect(result.exitCode).toBe(0);
+    expectExitCode(result, 0);
     expect(result.stdout).toBe(
       [
         "toolchains/llvm/prebuilt/linux-x86_64/lib/clang/21/include/c.h",
@@ -158,7 +158,7 @@ describe("pickarc commands", () => {
     const result = await runPickarc(["du", "--bytes", archive], directory);
     const rows = whitespaceRows(result.stdout);
 
-    expect(result.exitCode).toBe(0);
+    expectExitCode(result, 0);
     expect(rows).toEqual([
       ["compressed", "uncompressed", "files", "dirs", "entries"],
       ["11", "11", "2", "1", "3"],
@@ -267,7 +267,7 @@ describe("pickarc commands", () => {
       directory,
     );
 
-    expect(result.exitCode).toBe(0);
+    expectExitCode(result, 0);
     expect(await readText(path.join(directory, "out/bad.txt"))).toBe("bad");
     expect(await readText(path.join(directory, "out/ok.txt"))).toBe("ok");
   });
@@ -452,7 +452,8 @@ describe("pickarc commands", () => {
   test("cp permits absolute outputs only through replacement and supports lockdown", async () => {
     const directory = await makeTempDir();
     const archive = await writeZip(directory, "fixture.zip", [{ path: "file.txt", data: "body" }]);
-    const absoluteTarget = path.join(directory, "absolute.txt");
+    const resolvedDirectory = await realpath(directory);
+    const absoluteTarget = path.join(resolvedDirectory, "absolute.txt");
 
     const absoluteResult = await runPickarc(
       [
@@ -465,7 +466,7 @@ describe("pickarc commands", () => {
       directory,
     );
 
-    expect(absoluteResult.exitCode).toBe(0);
+    expectExitCode(absoluteResult, 0);
     expect(await readText(absoluteTarget)).toBe("body");
 
     const lockdownRoot = path.join(directory, "lock");
@@ -484,7 +485,7 @@ describe("pickarc commands", () => {
       directory,
     );
 
-    expect(lockdownResult.exitCode).toBe(1);
+    expectExitCode(lockdownResult, 1);
     expect(lockdownResult.stderr).toContain("escapes lockdown");
   });
 
@@ -504,6 +505,27 @@ async function makeTempDir(): Promise<string> {
   const directory = await mkdtemp(path.join(tmpdir(), "pickarc-"));
   tempDirs.push(directory);
   return directory;
+}
+
+function expectExitCode(
+  result: {
+    stdout: string;
+    stderr: string;
+    exitCode: number;
+  },
+  expected: number,
+): void {
+  if (result.exitCode !== expected) {
+    throw new Error(
+      [
+        `expected exit code ${expected}, received ${result.exitCode}`,
+        "stdout:",
+        result.stdout,
+        "stderr:",
+        result.stderr,
+      ].join("\n"),
+    );
+  }
 }
 
 async function writeZip(
