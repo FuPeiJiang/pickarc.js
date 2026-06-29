@@ -4,11 +4,15 @@ import { diskUsage, statEntries } from "./metadata.ts";
 import type { ParsedArgs } from "./options.ts";
 import { PasswordResolver } from "./passwords.ts";
 import { prepareFinalCandidates, type PathCandidate } from "./path-pipeline.ts";
-import { modeForCandidate } from "./permissions.ts";
+import { isSpecialFileTypeAllowed, modeForCandidate } from "./permissions.ts";
 import { CopyProgress } from "./progress.ts";
 import {
   chmodCreatedDirectory,
+  createDeviceExclusive,
   createDirectory,
+  createFifoExclusive,
+  createSocketExclusive,
+  createSymlinkExclusive,
   writeFileExclusive,
   writeFileExclusiveStream,
   type SafeWriteResult,
@@ -108,6 +112,10 @@ async function cat(
       fail(`${candidate.path}: cannot cat a directory`);
     }
 
+    if (candidate.specialFileType !== "none") {
+      fail(`${candidate.path}: cannot cat a special file entry`);
+    }
+
     const data = await candidate.readData({
       checkCrc: shouldCheckChecksum(candidate.path, options.ignoreChecksum),
       password: await passwords.resolve(candidate.path),
@@ -183,16 +191,8 @@ async function copy(
     }
 
     await runLimited(group.files, options.jobs, async (candidate) => {
-      if (candidate.isSymlink) {
-        fail(`${candidate.path}: refusing to extract ZIP symlink entry`);
-      }
-
-      if (candidate.isSpecialFile) {
-        fail(`${candidate.path}: refusing to extract ZIP special file entry`);
-      }
-
       rememberCreatedDirectories(
-        await copyFile(candidate, options, passwords, progress),
+        await copyEntry(candidate, options, passwords, progress),
         createdDirectories,
         directoryModes,
         fallbackDirectoryModeFor(options),
@@ -263,6 +263,102 @@ export interface BuildCopyGroupsOptions {
 const maxPrimeGap = 64 * 1024;
 const maxPrimeRange = 32 * 1024 * 1024;
 const bufferedCopyThreshold = 0;
+
+async function copyEntry(
+  candidate: PathCandidate,
+  options: ParsedArgs,
+  passwords: PasswordResolver,
+  progress: CopyProgress,
+): Promise<SafeWriteResult> {
+  if (candidate.specialFileType === "none") {
+    return copyFile(candidate, options, passwords, progress);
+  }
+
+  return copySpecialFile(candidate, options, passwords, progress);
+}
+
+async function copySpecialFile(
+  candidate: PathCandidate,
+  options: ParsedArgs,
+  passwords: PasswordResolver,
+  progress: CopyProgress,
+): Promise<SafeWriteResult> {
+  if (!isSpecialFileTypeAllowed(candidate.specialFileType, options.specialFileTypes)) {
+    if (candidate.specialFileType === "symlink") {
+      fail(`${candidate.path}: refusing to extract ZIP symlink entry`);
+    }
+
+    fail(`${candidate.path}: refusing to extract ZIP special file entry`);
+  }
+
+  const mode = modeForCandidate(candidate, options);
+
+  switch (candidate.specialFileType) {
+    case "symlink": {
+      progress.startFile({
+        path: candidate.path,
+        bytesTotal: candidate.uncompressedSize,
+      });
+      const data = await candidate.readData({
+        checkCrc: shouldCheckChecksum(candidate.path, options.ignoreChecksum),
+        password: await passwords.resolve(candidate.path),
+      });
+      const result = await createSymlinkExclusive(candidate.path, data, options.lockdown);
+      progress.advanceFile(data.byteLength);
+      progress.finishFile();
+      return result;
+    }
+
+    case "fifo":
+      return copyEmptySpecialFile(candidate, progress, () =>
+        createFifoExclusive(candidate.path, options.lockdown, mode),
+      );
+
+    case "socket":
+      return copyEmptySpecialFile(candidate, progress, () =>
+        createSocketExclusive(candidate.path, options.lockdown, mode),
+      );
+
+    case "char-device":
+    case "block-device": {
+      if (candidate.deviceNumbers === undefined) {
+        fail(`${candidate.path}: ${candidate.specialFileType} entry is missing device numbers`);
+      }
+
+      const deviceType = candidate.specialFileType;
+      const deviceNumbers = candidate.deviceNumbers;
+      return copyEmptySpecialFile(candidate, progress, () =>
+        createDeviceExclusive(
+          candidate.path,
+          options.lockdown,
+          mode,
+          deviceType,
+          deviceNumbers,
+        ),
+      );
+    }
+
+    case "unknown":
+      fail(`${candidate.path}: unsupported ZIP special file entry type`);
+
+    case "none":
+      return copyFile(candidate, options, passwords, progress);
+  }
+}
+
+async function copyEmptySpecialFile(
+  candidate: PathCandidate,
+  progress: CopyProgress,
+  create: () => Promise<SafeWriteResult>,
+): Promise<SafeWriteResult> {
+  progress.startFile({
+    path: candidate.path,
+    bytesTotal: candidate.uncompressedSize,
+  });
+  const result = await create();
+  progress.finishFile();
+  return result;
+}
 
 async function copyFile(
   candidate: PathCandidate,

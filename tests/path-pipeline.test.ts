@@ -149,17 +149,25 @@ describe("path pipeline", () => {
       "sticky",
       "--preserve-special-mode",
       "setgid",
+      "--allow-special-file-types",
+      "symlink",
+      "--allow-special-file-types",
+      "fifo",
       "archive.zip",
     ]);
 
     expect(parseArgs(["cp", "archive.zip"]).permissions).toBe("owner");
     expect(parsed.permissions).toBe("sanitize");
     expect(parsed.specialModeBits).toBe(0o3000);
+    expect(parsed.specialFileTypes).toBe(3);
     expect(() => parseArgs(["cp", "--permissions", "loose", "archive.zip"])).toThrow(
       "expected preserve, sanitize, owner, or private",
     );
     expect(() => parseArgs(["cp", "--preserve-special-mode", "magic", "archive.zip"])).toThrow(
       "expected setuid, setgid, sticky, or all",
+    );
+    expect(() => parseArgs(["cp", "--allow-special-file-types", "door", "archive.zip"])).toThrow(
+      "expected symlink, fifo, char-device, block-device, socket, or all",
     );
   });
 
@@ -320,6 +328,8 @@ function candidate(path: string): PathCandidate {
     physicalOffset: undefined,
     absoluteFromReplace: false,
     unixMode: undefined,
+    specialFileType: "none",
+    deviceNumbers: undefined,
     isSymlink: false,
     isSpecialFile: false,
     encrypted: false,

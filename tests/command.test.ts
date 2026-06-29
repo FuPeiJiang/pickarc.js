@@ -1,5 +1,15 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readlink,
+  realpath,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -289,6 +299,7 @@ describe("pickarc commands", () => {
     const directory = await makeTempDir();
     const archive = await writeZip(directory, "fixture.zip", [
       { path: "pipe", externalAttributes: 0o010644 << 16 },
+      { path: "link", data: "target.txt", externalAttributes: 0o120777 << 16 },
     ]);
 
     const result = await runPickarc(["cp", archive], directory);
@@ -296,6 +307,81 @@ describe("pickarc commands", () => {
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain("special file");
     await expect(stat(path.join(directory, "pipe"))).rejects.toThrow();
+    await expect(lstat(path.join(directory, "link"))).rejects.toThrow();
+  });
+
+  test("cp extracts ZIP symlink entries only when allowed", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const directory = await makeTempDir();
+    const archive = await writeZip(directory, "fixture.zip", [
+      { path: "target.txt", data: "target" },
+      { path: "link", data: "target.txt", externalAttributes: 0o120777 << 16 },
+    ]);
+
+    const result = await runPickarc(
+      ["cp", "--allow-special-file-types", "symlink", archive],
+      directory,
+    );
+
+    expectExitCode(result, 0);
+    expect((await lstat(path.join(directory, "link"))).isSymbolicLink()).toBe(true);
+    expect(await readlink(path.join(directory, "link"))).toBe("target.txt");
+  });
+
+  test("cp extracts ZIP FIFO entries only when allowed", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const directory = await makeTempDir();
+    const archive = await writeZip(directory, "fixture.zip", [
+      { path: "pipe", externalAttributes: 0o010644 << 16 },
+    ]);
+
+    const result = await runPickarc(
+      ["cp", "--allow-special-file-types", "fifo", archive],
+      directory,
+    );
+
+    expectExitCode(result, 0);
+    expect((await lstat(path.join(directory, "pipe"))).isFIFO()).toBe(true);
+  });
+
+  test("cp extracts ZIP socket entries only when allowed", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const directory = await makeTempDir();
+    const archive = await writeZip(directory, "fixture.zip", [
+      { path: "sock", externalAttributes: 0o140755 << 16 },
+    ]);
+
+    const result = await runPickarc(
+      ["cp", "--allow-special-file-types", "socket", archive],
+      directory,
+    );
+
+    expectExitCode(result, 0);
+    expect((await lstat(path.join(directory, "sock"))).isSocket()).toBe(true);
+  });
+
+  test("cp requires device numbers for ZIP device entries", async () => {
+    const directory = await makeTempDir();
+    const archive = await writeZip(directory, "fixture.zip", [
+      { path: "null", externalAttributes: 0o020666 << 16 },
+    ]);
+
+    const result = await runPickarc(
+      ["cp", "--allow-special-file-types", "char-device", archive],
+      directory,
+    );
+
+    expectExitCode(result, 1);
+    expect(result.stderr).toContain("missing device numbers");
   });
 
   test("cp applies owner permissions by default", async () => {

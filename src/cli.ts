@@ -43,6 +43,7 @@ Options:
   --lockdown <path>
   --permissions <preserve|sanitize|owner|private>
   --preserve-special-mode <setuid|setgid|sticky|all>
+  --allow-special-file-types <symlink|fifo|char-device|block-device|socket|all>
   --progress <auto|always|never>, --no-progress
   --jobs <n>
   --json, --jsonl

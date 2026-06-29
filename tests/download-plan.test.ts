@@ -104,6 +104,8 @@ function candidate(
     physicalOffset,
     absoluteFromReplace: false,
     unixMode: undefined,
+    specialFileType: "none",
+    deviceNumbers: undefined,
     isSymlink: false,
     isSpecialFile: false,
     encrypted: false,

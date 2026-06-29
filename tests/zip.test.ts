@@ -27,6 +27,38 @@ describe("ZipArchive", () => {
     ]);
   });
 
+  test("classifies ZIP Unix special file entries", async () => {
+    const archive = ZipArchive.fromBuffer(
+      makeZip([
+        { path: "link", data: "target", externalAttributes: 0o120777 << 16 },
+        { path: "pipe", externalAttributes: 0o010644 << 16 },
+        {
+          path: "tty",
+          externalAttributes: 0o020600 << 16,
+          extra: unixDeviceExtra(5, 1),
+        },
+        {
+          path: "disk",
+          externalAttributes: 0o060600 << 16,
+          extra: unixDeviceExtra(8, 0),
+        },
+        { path: "sock", externalAttributes: 0o140777 << 16 },
+      ]),
+      "fixture.zip",
+    );
+
+    const entries = await archive.entries();
+    expect(entries.map((entry) => [entry.path, entry.specialFileType])).toEqual([
+      ["link", "symlink"],
+      ["pipe", "fifo"],
+      ["tty", "char-device"],
+      ["disk", "block-device"],
+      ["sock", "socket"],
+    ]);
+    expect(entries[2]?.deviceNumbers).toEqual({ major: 5, minor: 1 });
+    expect(entries[3]?.deviceNumbers).toEqual({ major: 8, minor: 0 });
+  });
+
   test("reads stored and deflated entry data with CRC checks", async () => {
     const archive = ZipArchive.fromBuffer(
       makeZip([
@@ -211,4 +243,18 @@ async function readStreamText(chunks: AsyncIterable<Uint8Array>): Promise<string
   }
 
   return new TextDecoder().decode(output);
+}
+
+function unixDeviceExtra(major: number, minor: number): Uint8Array {
+  const bytes = new Uint8Array(4 + 20);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  view.setUint16(0, 0x000d, true);
+  view.setUint16(2, 20, true);
+  view.setUint32(4, 0, true);
+  view.setUint32(8, 0, true);
+  view.setUint16(12, 0, true);
+  view.setUint16(14, 0, true);
+  view.setUint32(16, major, true);
+  view.setUint32(20, minor, true);
+  return bytes;
 }

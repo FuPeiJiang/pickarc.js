@@ -6,6 +6,7 @@ export interface ZipFixtureEntry {
   data?: string | Uint8Array;
   method?: 0 | 8;
   externalAttributes?: number;
+  extra?: Uint8Array;
   crc32?: number;
 }
 
@@ -17,11 +18,12 @@ export function makeZip(entries: readonly ZipFixtureEntry[]): Uint8Array {
   for (const entry of entries) {
     const name = new TextEncoder().encode(entry.path);
     const data = toBytes(entry.data ?? "");
+    const extra = entry.extra ?? new Uint8Array();
     const method = entry.method ?? 0;
     const compressed = method === 8 ? deflateRawSync(data) : data;
     const checksum = entry.crc32 ?? crc32(data);
     const localOffset = offset;
-    const local = new Uint8Array(30 + name.byteLength);
+    const local = new Uint8Array(30 + name.byteLength + extra.byteLength);
     const localView = viewOf(local);
 
     localView.setUint32(0, 0x04034b50, true);
@@ -32,11 +34,13 @@ export function makeZip(entries: readonly ZipFixtureEntry[]): Uint8Array {
     localView.setUint32(18, compressed.byteLength, true);
     localView.setUint32(22, data.byteLength, true);
     localView.setUint16(26, name.byteLength, true);
+    localView.setUint16(28, extra.byteLength, true);
     local.set(name, 30);
+    local.set(extra, 30 + name.byteLength);
     chunks.push(local, compressed);
     offset += local.byteLength + compressed.byteLength;
 
-    const central = new Uint8Array(46 + name.byteLength);
+    const central = new Uint8Array(46 + name.byteLength + extra.byteLength);
     const centralView = viewOf(central);
     centralView.setUint32(0, 0x02014b50, true);
     centralView.setUint16(4, 0x031e, true);
@@ -47,9 +51,11 @@ export function makeZip(entries: readonly ZipFixtureEntry[]): Uint8Array {
     centralView.setUint32(20, compressed.byteLength, true);
     centralView.setUint32(24, data.byteLength, true);
     centralView.setUint16(28, name.byteLength, true);
+    centralView.setUint16(30, extra.byteLength, true);
     centralView.setUint32(38, entry.externalAttributes ?? defaultExternalAttributes(entry.path), true);
     centralView.setUint32(42, localOffset, true);
     central.set(name, 46);
+    central.set(extra, 46 + name.byteLength);
     centralDirectory.push(central);
   }
 

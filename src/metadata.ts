@@ -1,6 +1,7 @@
 import { fail } from "./errors.ts";
 import type { ParsedArgs } from "./options.ts";
 import type { PathCandidate } from "./path-pipeline.ts";
+import type { ArchiveFileType } from "./permissions.ts";
 import { formatBytes } from "./progress.ts";
 
 interface SizeSummary {
@@ -28,8 +29,10 @@ interface StatJson {
   compressedSize: number;
   uncompressedSize: number;
   crc32: string | undefined;
+  specialFileType: ArchiveFileType;
   isSymlink: boolean;
   isSpecialFile: boolean;
+  deviceNumbers: { major: number; minor: number } | undefined;
   localHeaderOffset: number | undefined;
 }
 
@@ -332,8 +335,10 @@ function candidateToStatJson(candidate: PathCandidate): StatJson {
     compressedSize: candidate.kind === "file" ? candidate.compressedSize : 0,
     uncompressedSize: candidate.kind === "file" ? candidate.uncompressedSize : 0,
     crc32: formatCrc32(candidate.crc32),
+    specialFileType: candidate.specialFileType,
     isSymlink: candidate.isSymlink,
     isSpecialFile: candidate.isSpecialFile,
+    deviceNumbers: candidate.deviceNumbers,
     localHeaderOffset: candidate.physicalOffset,
   };
 }

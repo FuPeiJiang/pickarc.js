@@ -1,6 +1,8 @@
 import { fail } from "./errors.ts";
 import type { PathMatcher } from "./matcher.ts";
 import { matchesAny } from "./matcher.ts";
+import type { ArchiveFileType } from "./permissions.ts";
+import type { DeviceNumbers } from "./zip.ts";
 import {
   assertUsableFinalPath,
   basenameOfVirtualPath,
@@ -51,6 +53,8 @@ export interface PathCandidate {
   physicalOffset: number | undefined;
   absoluteFromReplace: boolean;
   unixMode: number | undefined;
+  specialFileType: ArchiveFileType;
+  deviceNumbers: DeviceNumbers | undefined;
   isSymlink: boolean;
   isSpecialFile: boolean;
   encrypted: boolean;

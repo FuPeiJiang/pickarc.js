@@ -1,8 +1,9 @@
 import { constants } from "node:fs";
-import { lstat, mkdir, open, unlink } from "node:fs/promises";
+import { lstat, mkdir, open, symlink, unlink } from "node:fs/promises";
 import path from "node:path";
-import { dlopen, FFIType } from "bun:ffi";
+import { dlopen, FFIType, ptr } from "bun:ffi";
 import { fail } from "./errors.ts";
+import type { DeviceNumbers } from "./zip.ts";
 
 const windowsAbsolutePath = /^[A-Za-z]:\//;
 const initialFileMode = 0o600;
@@ -10,6 +11,9 @@ const initialDirectoryMode = 0o700;
 let nativeFchmod: ((fd: number, mode: number) => number) | undefined;
 // Keep the dlopen handle alive for the cached native symbol.
 let nativeFchmodLibrary: unknown;
+let nativeSpecial: NativeSpecialSymbols | undefined;
+// Keep the dlopen handle alive for the cached native symbols.
+let nativeSpecialLibrary: unknown;
 
 export interface ResolvedOutputPath {
   target: string;
@@ -22,6 +26,15 @@ export interface SafeWriteResult {
 
 export interface CreateDirectoryResult extends SafeWriteResult {
   target: string;
+}
+
+interface NativeSpecialSymbols {
+  mkfifo: (path: number, mode: number) => number;
+  mknod: (path: number, mode: number, device: number | bigint) => number;
+  socket: (domain: number, type: number, protocol: number) => number;
+  bind: (socket: number, address: number, length: number) => number;
+  close: (fd: number) => number;
+  chmod: (path: number, mode: number) => number;
 }
 
 export async function resolveOutputPath(
@@ -132,6 +145,128 @@ export async function createDirectory(
   return {
     target,
     createdDirectories: await ensureDirectory(target, lockdownRoot),
+  };
+}
+
+export async function createSymlinkExclusive(
+  finalPath: string,
+  targetBytes: Uint8Array,
+  lockdown: string | undefined,
+): Promise<SafeWriteResult> {
+  const { target, lockdownRoot } = await resolveOutputPath(finalPath, lockdown);
+  assertPosixSpecialFileSupport(target, "symlink");
+  const createdDirectories = await ensureDirectory(path.dirname(target), lockdownRoot);
+  const linkTarget = decodeSymlinkTarget(target, targetBytes);
+
+  try {
+    await symlink(linkTarget, target);
+  } catch (error) {
+    failOpen(target, error);
+  }
+
+  return {
+    createdDirectories,
+  };
+}
+
+export async function createFifoExclusive(
+  finalPath: string,
+  lockdown: string | undefined,
+  mode: number,
+): Promise<SafeWriteResult> {
+  const { target, lockdownRoot } = await resolveOutputPath(finalPath, lockdown);
+  assertPosixSpecialFileSupport(target, "FIFO");
+  const createdDirectories = await ensureDirectory(path.dirname(target), lockdownRoot);
+  await assertMissingTarget(target);
+  const pathBytes = cPath(target);
+  const result = specialNativeSymbols().mkfifo(ptr(pathBytes), initialFileMode);
+
+  if (result !== 0) {
+    failNativeSpecial(target, "mkfifo", result);
+  }
+
+  await assertSpecialPathType(target, "FIFO", (info) => info.isFIFO());
+  await chmodSpecialPath(target, mode);
+  return {
+    createdDirectories,
+  };
+}
+
+export async function createDeviceExclusive(
+  finalPath: string,
+  lockdown: string | undefined,
+  mode: number,
+  deviceType: "char-device" | "block-device",
+  deviceNumbers: DeviceNumbers,
+): Promise<SafeWriteResult> {
+  const { target, lockdownRoot } = await resolveOutputPath(finalPath, lockdown);
+  assertPosixSpecialFileSupport(target, deviceType);
+  const createdDirectories = await ensureDirectory(path.dirname(target), lockdownRoot);
+  await assertMissingTarget(target);
+  const pathBytes = cPath(target);
+  const fileTypeMode = deviceType === "char-device" ? 0o020000 : 0o060000;
+  const result = specialNativeSymbols().mknod(
+    ptr(pathBytes),
+    fileTypeMode | initialFileMode,
+    encodeDeviceNumber(deviceNumbers, target),
+  );
+
+  if (result !== 0) {
+    failNativeSpecial(target, "mknod", result, "; root or CAP_MKNOD may be required");
+  }
+
+  await assertSpecialPathType(
+    target,
+    deviceType,
+    deviceType === "char-device"
+      ? (info) => info.isCharacterDevice()
+      : (info) => info.isBlockDevice(),
+  );
+  await chmodSpecialPath(target, mode);
+  return {
+    createdDirectories,
+  };
+}
+
+export async function createSocketExclusive(
+  finalPath: string,
+  lockdown: string | undefined,
+  mode: number,
+): Promise<SafeWriteResult> {
+  const { target, lockdownRoot } = await resolveOutputPath(finalPath, lockdown);
+  assertPosixSpecialFileSupport(target, "socket");
+  const createdDirectories = await ensureDirectory(path.dirname(target), lockdownRoot);
+  await assertMissingTarget(target);
+  const native = specialNativeSymbols();
+  const fd = native.socket(1, 1, 0);
+
+  if (fd < 0) {
+    failNativeSpecial(target, "socket", fd);
+  }
+
+  let completed = false;
+
+  try {
+    const address = unixSocketAddress(target);
+    const result = native.bind(fd, ptr(address.bytes), address.length);
+
+    if (result !== 0) {
+      failNativeSpecial(target, "bind", result);
+    }
+
+    completed = true;
+  } finally {
+    native.close(fd);
+
+    if (!completed) {
+      await unlink(target).catch(() => undefined);
+    }
+  }
+
+  await assertSpecialPathType(target, "socket", (info) => info.isSocket());
+  await chmodSpecialPath(target, mode);
+  return {
+    createdDirectories,
   };
 }
 
@@ -261,6 +396,69 @@ function failOpen(target: string, error: unknown): never {
   fail(`${target}: ${String(error)}`);
 }
 
+async function assertMissingTarget(target: string): Promise<void> {
+  try {
+    await lstat(target);
+  } catch (error) {
+    if (isNotFound(error)) {
+      return;
+    }
+
+    failOpen(target, error);
+  }
+
+  fail(`${target}: refused to overwrite existing path`);
+}
+
+function assertPosixSpecialFileSupport(target: string, kind: string): void {
+  if (process.platform === "win32") {
+    fail(`${target}: ${kind} extraction is not supported on Windows`);
+  }
+}
+
+function decodeSymlinkTarget(target: string, bytes: Uint8Array): string {
+  const text = new TextDecoder().decode(bytes);
+
+  if (text.includes("\0")) {
+    fail(`${target}: symlink target contains a NUL byte`);
+  }
+
+  if (text.length === 0) {
+    fail(`${target}: symlink target is empty`);
+  }
+
+  return text;
+}
+
+async function assertSpecialPathType(
+  target: string,
+  expected: string,
+  predicate: (info: Awaited<ReturnType<typeof lstat>>) => boolean,
+): Promise<void> {
+  const info = await lstat(target);
+
+  if (!predicate(info)) {
+    fail(`${target}: expected created ${expected}`);
+  }
+}
+
+async function chmodSpecialPath(target: string, mode: number): Promise<void> {
+  const pathBytes = cPath(target);
+  const result = specialNativeSymbols().chmod(ptr(pathBytes), mode);
+
+  if (result !== 0) {
+    failNativeSpecial(target, "chmod", result);
+  }
+}
+
+function cPath(target: string): Uint8Array {
+  if (target.includes("\0")) {
+    fail(`${target}: path contains a NUL byte`);
+  }
+
+  return Buffer.from(`${target}\0`, "utf8");
+}
+
 function isNotFound(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }
@@ -330,6 +528,131 @@ function fchmod(): (fd: number, mode: number) => number {
   }
 
   fail(`failed to load native fchmod: ${errors.join("; ")}`);
+}
+
+function specialNativeSymbols(): NativeSpecialSymbols {
+  if (nativeSpecial !== undefined) {
+    return nativeSpecial;
+  }
+
+  const candidates = fchmodLibraryCandidates();
+  const errors: string[] = [];
+
+  for (let index = 0; index < candidates.length; index += 1) {
+    const candidate = candidates[index]!;
+
+    try {
+      const library = dlopen(candidate, {
+        mkfifo: {
+          args: [FFIType.ptr, FFIType.u32],
+          returns: FFIType.i32,
+        },
+        mknod: {
+          args: [
+            FFIType.ptr,
+            FFIType.u32,
+            process.platform === "darwin" ? FFIType.u32 : FFIType.u64,
+          ],
+          returns: FFIType.i32,
+        },
+        socket: {
+          args: [FFIType.i32, FFIType.i32, FFIType.i32],
+          returns: FFIType.i32,
+        },
+        bind: {
+          args: [FFIType.i32, FFIType.ptr, FFIType.u32],
+          returns: FFIType.i32,
+        },
+        close: {
+          args: [FFIType.i32],
+          returns: FFIType.i32,
+        },
+        chmod: {
+          args: [FFIType.ptr, FFIType.u32],
+          returns: FFIType.i32,
+        },
+      });
+
+      nativeSpecialLibrary = library;
+      nativeSpecial = library.symbols as NativeSpecialSymbols;
+      return nativeSpecial;
+    } catch (error) {
+      errors.push(`${candidate}: ${String(error)}`);
+    }
+  }
+
+  fail(`failed to load native special-file functions: ${errors.join("; ")}`);
+}
+
+function encodeDeviceNumber(device: DeviceNumbers, target: string): number | bigint {
+  assertUint32(device.major, target, "major");
+  assertUint32(device.minor, target, "minor");
+
+  if (process.platform === "darwin") {
+    if (device.major > 0xff || device.minor > 0xffffff) {
+      fail(`${target}: device number is too large for this platform`);
+    }
+
+    return ((device.major & 0xff) << 24) | (device.minor & 0xffffff);
+  }
+
+  const major = BigInt(device.major);
+  const minor = BigInt(device.minor);
+  return (
+    (minor & 0xffn) |
+    ((major & 0xfffn) << 8n) |
+    ((minor & ~0xffn) << 12n) |
+    ((major & ~0xfffn) << 32n)
+  );
+}
+
+function assertUint32(value: number, target: string, name: string): void {
+  if (!Number.isInteger(value) || value < 0 || value > 0xffffffff) {
+    fail(`${target}: invalid ${name} device number ${value}`);
+  }
+}
+
+function unixSocketAddress(target: string): { bytes: Uint8Array; length: number } {
+  if (process.platform === "darwin") {
+    const pathBytes = Buffer.from(target, "utf8");
+    const maxPathLength = 104;
+    const length = 2 + pathBytes.byteLength;
+
+    if (pathBytes.byteLength > maxPathLength || length > 0xff) {
+      fail(`${target}: Unix socket path is too long`);
+    }
+
+    const bytes = new Uint8Array(2 + maxPathLength);
+    bytes[0] = length;
+    bytes[1] = 1;
+    bytes.set(pathBytes, 2);
+    return { bytes, length };
+  }
+
+  const pathBytes = Buffer.from(`${target}\0`, "utf8");
+  const maxPathLength = 108;
+
+  if (pathBytes.byteLength > maxPathLength) {
+    fail(`${target}: Unix socket path is too long`);
+  }
+
+  const bytes = new Uint8Array(2 + maxPathLength);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  view.setUint16(0, 1, true);
+  bytes.set(pathBytes, 2);
+  return {
+    bytes,
+    length: 2 + pathBytes.byteLength,
+  };
+}
+
+function failNativeSpecial(
+  target: string,
+  operation: string,
+  result: number,
+  hint = "",
+): never {
+  fail(`${target}: ${operation} failed with code ${result}${hint}`);
 }
 
 export function fchmodLibraryCandidates(

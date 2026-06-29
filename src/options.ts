@@ -3,7 +3,9 @@ import { globMatcher, regexMatcher, type PathMatcher } from "./matcher.ts";
 import type { PathOperation } from "./path-pipeline.ts";
 import {
   parsePermissionsMode,
+  parseSpecialFileTypeName,
   parseSpecialModeName,
+  specialFileTypeMaskFor,
   specialModeMaskFor,
   type PermissionsMode,
 } from "./permissions.ts";
@@ -43,6 +45,7 @@ export interface ParsedArgs {
   lockdown: string | undefined;
   permissions: PermissionsMode;
   specialModeBits: number;
+  specialFileTypes: number;
   progress: ProgressMode;
   jobs: number;
   json: boolean;
@@ -76,6 +79,7 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
   let lockdown: string | undefined;
   let permissions: PermissionsMode = "owner";
   let specialModeBits = 0;
+  let specialFileTypes = 0;
   let progress: ProgressMode = "auto";
   let jobs = 1;
   let json = false;
@@ -125,6 +129,12 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
       case "--preserve-special-mode":
         specialModeBits |= specialModeMaskFor(
           parseSpecialModeName(requireValue(argv, ++index, arg)),
+        );
+        break;
+
+      case "--allow-special-file-types":
+        specialFileTypes |= specialFileTypeMaskFor(
+          parseSpecialFileTypeName(requireValue(argv, ++index, arg)),
         );
         break;
 
@@ -404,6 +414,7 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
     lockdown,
     permissions,
     specialModeBits,
+    specialFileTypes,
     progress,
     jobs,
     json,

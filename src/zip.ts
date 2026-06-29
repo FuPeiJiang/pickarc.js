@@ -2,6 +2,7 @@ import { Readable } from "node:stream";
 import { createInflateRaw, inflateRawSync } from "node:zlib";
 import { Crc32 } from "./crc32.ts";
 import { fail } from "./errors.ts";
+import type { ArchiveFileType } from "./permissions.ts";
 import { BufferRangeSource, SubRangeSource, type RangeSource } from "./range-source.ts";
 import { normalizeArchivePath } from "./path-utils.ts";
 import {
@@ -43,6 +44,8 @@ export interface ZipEntry {
   readonly externalAttributes: number;
   readonly unixMode: number | undefined;
   readonly kind: "file" | "directory";
+  readonly specialFileType: ArchiveFileType;
+  readonly deviceNumbers: DeviceNumbers | undefined;
   readonly isSymlink: boolean;
   readonly isSpecialFile: boolean;
   readonly encrypted: boolean;
@@ -62,6 +65,11 @@ export interface StreamEntryOptions extends ReadEntryOptions {
 export interface ZipEntryDataRange {
   offset: number;
   length: number;
+}
+
+export interface DeviceNumbers {
+  major: number;
+  minor: number;
 }
 
 interface CentralDirectoryInfo {
@@ -150,12 +158,10 @@ export class ZipArchive {
       const localHeaderOffset = zip64.localHeaderOffset;
       const unixMode = readUnixMode(madeByHost, externalAttributes);
       const fileType = unixMode === undefined ? 0 : unixMode & 0o170000;
-      const isSymlink = fileType === 0o120000;
-      const isSpecialFile =
-        fileType !== 0 &&
-        fileType !== 0o040000 &&
-        fileType !== 0o100000 &&
-        fileType !== 0o120000;
+      const specialFileType = specialFileTypeForUnixMode(fileType);
+      const deviceNumbers = readUnixDeviceNumbers(extra, specialFileType);
+      const isSymlink = specialFileType === "symlink";
+      const isSpecialFile = specialFileType !== "none" && specialFileType !== "symlink";
       const kind = rawPath.endsWith("/") || fileType === 0o040000 ? "directory" : "file";
 
       entries.push({
@@ -180,6 +186,8 @@ export class ZipArchive {
         externalAttributes,
         unixMode,
         kind,
+        specialFileType,
+        deviceNumbers,
         isSymlink,
         isSpecialFile,
         encrypted,
@@ -500,6 +508,67 @@ function readUnixMode(madeByHost: number, externalAttributes: number): number | 
 
   const mode = (externalAttributes >>> 16) & 0xffff;
   return mode === 0 ? undefined : mode;
+}
+
+function specialFileTypeForUnixMode(fileType: number): ArchiveFileType {
+  switch (fileType) {
+    case 0:
+    case 0o040000:
+    case 0o100000:
+      return "none";
+
+    case 0o120000:
+      return "symlink";
+
+    case 0o010000:
+      return "fifo";
+
+    case 0o020000:
+      return "char-device";
+
+    case 0o060000:
+      return "block-device";
+
+    case 0o140000:
+      return "socket";
+
+    default:
+      return "unknown";
+  }
+}
+
+function readUnixDeviceNumbers(
+  extra: Uint8Array,
+  specialFileType: ArchiveFileType,
+): DeviceNumbers | undefined {
+  if (specialFileType !== "char-device" && specialFileType !== "block-device") {
+    return undefined;
+  }
+
+  const view = viewOf(extra);
+  let cursor = 0;
+
+  while (cursor + 4 <= extra.byteLength) {
+    const tag = view.getUint16(cursor, true);
+    const size = view.getUint16(cursor + 2, true);
+    const start = cursor + 4;
+    const end = start + size;
+
+    if (end > extra.byteLength) {
+      return undefined;
+    }
+
+    if (tag === 0x000d && size >= 20) {
+      return {
+        major: view.getUint32(start + 12, true),
+        minor: view.getUint32(start + 16, true),
+      };
+    }
+
+    cursor = end;
+  }
+
+  return undefined;
 }
 
 function readZip64Extra(

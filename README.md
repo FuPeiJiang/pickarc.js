@@ -45,6 +45,7 @@ Implemented:
 - CRC32 checks by default
 - ZipCrypto and WinZip AES encrypted ZIP entries
 - nested stored ZIP expansion with `--as-dir`
+- opt-in POSIX symlink, FIFO, device, and socket extraction
 - duplicate final-path detection before normal file reads
 - proxy support through Bun `fetch`
 - optional `-k, --insecure` TLS verification disable switch
@@ -190,11 +191,17 @@ Permission handling is controlled by:
 --preserve-special-mode setgid
 --preserve-special-mode setuid
 --preserve-special-mode all
+--allow-special-file-types symlink
+--allow-special-file-types fifo
+--allow-special-file-types char-device
+--allow-special-file-types block-device
+--allow-special-file-types socket
+--allow-special-file-types all
 ```
 
 The default is `--permissions owner`: preserve only the archive owner permission bits, so `0755` becomes `0700` and `0644` becomes `0600`. `preserve` keeps normal `0o777` Unix mode bits, `sanitize` keeps normal mode bits but removes group/other write, and `private` forces files to `0600` and directories to `0700`.
 
-Special mode bits are dropped unless explicitly requested with repeatable `--preserve-special-mode` flags. Symlinks and special file types are still refused.
+Special mode bits are dropped unless explicitly requested with repeatable `--preserve-special-mode` flags. Symlinks, FIFOs, device nodes, and Unix sockets are refused unless explicitly requested with repeatable `--allow-special-file-types` flags. Character and block devices also require device numbers in ZIP Unix extra metadata and may require root or `CAP_MKNOD`.
 
 Files and directories are created private first. File modes are applied after the file is written successfully; directory modes are applied after extraction, deepest directory first. On Windows, permission handling is best-effort because POSIX modes do not map cleanly to Windows ACLs.
 
@@ -287,7 +294,7 @@ pickarc stat --json archive.zip
 pickarc stat --jsonl archive.zip
 ```
 
-JSON metadata includes final path, source path, archive label, kind, compression method, raw compression method, encryption method, compressed and uncompressed size, CRC32, symlink status, and local header offset.
+JSON metadata includes final path, source path, archive label, kind, compression method, raw compression method, encryption method, compressed and uncompressed size, CRC32, special file type, symlink status, device numbers when available, and local header offset.
 
 Example JSONL:
 

@@ -2,6 +2,14 @@ import { fail } from "./errors.ts";
 
 export type PermissionsMode = "preserve" | "sanitize" | "owner" | "private";
 export type SpecialModeName = "setuid" | "setgid" | "sticky" | "all";
+export type SpecialFileType =
+  | "symlink"
+  | "fifo"
+  | "char-device"
+  | "block-device"
+  | "socket";
+export type ArchiveFileType = "none" | SpecialFileType | "unknown";
+export type SpecialFileTypeName = SpecialFileType | "all";
 
 export interface PermissionPolicy {
   permissions: PermissionsMode;
@@ -21,6 +29,13 @@ export const privateDirectoryMode = 0o700;
 const normalModeMask = 0o777;
 const specialModeMask = 0o7000;
 const groupOtherWriteMask = 0o022;
+const symlinkMask = 1 << 0;
+const fifoMask = 1 << 1;
+const charDeviceMask = 1 << 2;
+const blockDeviceMask = 1 << 3;
+const socketMask = 1 << 4;
+const allSpecialFileTypesMask =
+  symlinkMask | fifoMask | charDeviceMask | blockDeviceMask | socketMask;
 
 export function modeForCandidate(candidate: ModeCandidate, policy: PermissionPolicy): number {
   const normalMode = normalPermissions(candidate);
@@ -87,6 +102,56 @@ export function specialModeMaskFor(name: SpecialModeName): number {
     case "all":
       return specialModeMask;
   }
+}
+
+export function parseSpecialFileTypeName(value: string): SpecialFileTypeName {
+  if (
+    value === "symlink" ||
+    value === "fifo" ||
+    value === "char-device" ||
+    value === "block-device" ||
+    value === "socket" ||
+    value === "all"
+  ) {
+    return value;
+  }
+
+  fail(
+    `--allow-special-file-types: expected symlink, fifo, char-device, block-device, socket, or all`,
+  );
+}
+
+export function specialFileTypeMaskFor(name: SpecialFileTypeName): number {
+  switch (name) {
+    case "symlink":
+      return symlinkMask;
+
+    case "fifo":
+      return fifoMask;
+
+    case "char-device":
+      return charDeviceMask;
+
+    case "block-device":
+      return blockDeviceMask;
+
+    case "socket":
+      return socketMask;
+
+    case "all":
+      return allSpecialFileTypesMask;
+  }
+}
+
+export function isSpecialFileTypeAllowed(
+  type: ArchiveFileType,
+  allowedMask: number,
+): boolean {
+  if (type === "none" || type === "unknown") {
+    return false;
+  }
+
+  return (specialFileTypeMaskFor(type) & allowedMask) !== 0;
 }
 
 function normalPermissions(candidate: ModeCandidate): number {

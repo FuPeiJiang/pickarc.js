@@ -74,6 +74,8 @@ function candidateFromZipEntry(
     physicalOffset: entry.localHeaderOffset,
     absoluteFromReplace,
     unixMode: entry.unixMode,
+    specialFileType: entry.specialFileType,
+    deviceNumbers: entry.deviceNumbers,
     isSymlink: entry.isSymlink,
     isSpecialFile: entry.isSpecialFile,
     encrypted: entry.encrypted,
