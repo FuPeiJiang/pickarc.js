@@ -140,6 +140,29 @@ describe("path pipeline", () => {
     );
   });
 
+  test("parses permission policy options", () => {
+    const parsed = parseArgs([
+      "cp",
+      "--permissions",
+      "sanitize",
+      "--preserve-special-mode",
+      "sticky",
+      "--preserve-special-mode",
+      "setgid",
+      "archive.zip",
+    ]);
+
+    expect(parseArgs(["cp", "archive.zip"]).permissions).toBe("owner");
+    expect(parsed.permissions).toBe("sanitize");
+    expect(parsed.specialModeBits).toBe(0o3000);
+    expect(() => parseArgs(["cp", "--permissions", "loose", "archive.zip"])).toThrow(
+      "expected preserve, sanitize, owner, or private",
+    );
+    expect(() => parseArgs(["cp", "--preserve-special-mode", "magic", "archive.zip"])).toThrow(
+      "expected setuid, setgid, sticky, or all",
+    );
+  });
+
   test("parses password sources and path-scoped password rules", () => {
     const parsed = parseArgs([
       "cp",
@@ -296,7 +319,9 @@ function candidate(path: string): PathCandidate {
     uncompressedSize: 0,
     physicalOffset: undefined,
     absoluteFromReplace: false,
+    unixMode: undefined,
     isSymlink: false,
+    isSpecialFile: false,
     encrypted: false,
     encryptionMethod: "none",
     readData: async (_options) => {

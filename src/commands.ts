@@ -4,8 +4,15 @@ import { diskUsage, statEntries } from "./metadata.ts";
 import type { ParsedArgs } from "./options.ts";
 import { PasswordResolver } from "./passwords.ts";
 import { prepareFinalCandidates, type PathCandidate } from "./path-pipeline.ts";
+import { modeForCandidate } from "./permissions.ts";
 import { CopyProgress } from "./progress.ts";
-import { createDirectory, writeFileExclusive, writeFileExclusiveStream } from "./safe-write.ts";
+import {
+  chmodCreatedDirectory,
+  createDirectory,
+  writeFileExclusive,
+  writeFileExclusiveStream,
+  type SafeWriteResult,
+} from "./safe-write.ts";
 
 export async function runCommand(options: ParsedArgs): Promise<void> {
   validateCommandOptions(options);
@@ -116,6 +123,8 @@ async function copy(
 ): Promise<void> {
   const files: PathCandidate[] = [];
   const directories: PathCandidate[] = [];
+  const createdDirectories = new Set<string>();
+  const directoryModes = new Map<string, number>();
   let bytesTotal = 0;
 
   for (let index = 0; index < candidates.length; index += 1) {
@@ -152,7 +161,18 @@ async function copy(
   progress.finishPlanning();
 
   for (let index = 0; index < directories.length; index += 1) {
-    await createDirectory(directories[index]!.path, options.lockdown);
+    const candidate = directories[index]!;
+    const result = await createDirectory(candidate.path, options.lockdown);
+    rememberCreatedDirectories(
+      result,
+      createdDirectories,
+      directoryModes,
+      fallbackDirectoryModeFor(options),
+    );
+
+    if (createdDirectories.has(result.target)) {
+      directoryModes.set(result.target, modeForCandidate(candidate, options));
+    }
   }
 
   for (let groupIndex = 0; groupIndex < groups.length; groupIndex += 1) {
@@ -167,10 +187,20 @@ async function copy(
         fail(`${candidate.path}: refusing to extract ZIP symlink entry`);
       }
 
-      await copyFile(candidate, options, passwords, progress);
+      if (candidate.isSpecialFile) {
+        fail(`${candidate.path}: refusing to extract ZIP special file entry`);
+      }
+
+      rememberCreatedDirectories(
+        await copyFile(candidate, options, passwords, progress),
+        createdDirectories,
+        directoryModes,
+        fallbackDirectoryModeFor(options),
+      );
     });
   }
 
+  await applyCreatedDirectoryModes(directoryModes);
   progress.finish();
 }
 
@@ -239,36 +269,91 @@ async function copyFile(
   options: ParsedArgs,
   passwords: PasswordResolver,
   progress: CopyProgress,
-): Promise<void> {
+): Promise<SafeWriteResult> {
   progress.startFile({
     path: candidate.path,
     bytesTotal: candidate.uncompressedSize,
   });
+  const mode = modeForCandidate(candidate, options);
 
   if (candidate.compressedSize <= bufferedCopyThreshold) {
     const data = await candidate.readData({
       checkCrc: shouldCheckChecksum(candidate.path, options.ignoreChecksum),
       password: await passwords.resolve(candidate.path),
     });
-    await writeFileExclusive(candidate.path, data, options.lockdown);
+    const result = await writeFileExclusive(candidate.path, data, options.lockdown, mode);
     progress.advanceFile(data.byteLength);
     progress.finishFile();
-    return;
+    return result;
   }
 
-  await writeFileExclusiveStream(
+  const result = await writeFileExclusiveStream(
     candidate.path,
     candidate.streamData({
       checkCrc: shouldCheckChecksum(candidate.path, options.ignoreChecksum),
       password: await passwords.resolve(candidate.path),
     }),
     options.lockdown,
+    mode,
     (bytes) => {
       progress.advanceFile(bytes);
     },
   );
 
   progress.finishFile();
+  return result;
+}
+
+function fallbackDirectoryModeFor(options: ParsedArgs): number {
+  return modeForCandidate(
+    {
+      kind: "directory",
+      unixMode: undefined,
+    },
+    options,
+  );
+}
+
+function rememberCreatedDirectories(
+  result: SafeWriteResult,
+  createdDirectories: Set<string>,
+  directoryModes: Map<string, number>,
+  mode: number,
+): void {
+  for (let index = 0; index < result.createdDirectories.length; index += 1) {
+    const directory = result.createdDirectories[index]!;
+    createdDirectories.add(directory);
+
+    if (!directoryModes.has(directory)) {
+      directoryModes.set(directory, mode);
+    }
+  }
+}
+
+async function applyCreatedDirectoryModes(directoryModes: Map<string, number>): Promise<void> {
+  const directories = [...directoryModes.entries()];
+
+  directories.sort((left, right) => {
+    const byDepth = pathDepth(right[0]) - pathDepth(left[0]);
+    return byDepth === 0 ? right[0].localeCompare(left[0]) : byDepth;
+  });
+
+  for (let index = 0; index < directories.length; index += 1) {
+    const [directory, mode] = directories[index]!;
+    await chmodCreatedDirectory(directory, mode);
+  }
+}
+
+function pathDepth(value: string): number {
+  let depth = 0;
+
+  for (let index = 0; index < value.length; index += 1) {
+    if (value.charCodeAt(index) === 47 || value.charCodeAt(index) === 92) {
+      depth += 1;
+    }
+  }
+
+  return depth;
 }
 
 async function runLimited<T>(

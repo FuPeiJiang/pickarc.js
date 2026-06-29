@@ -30,6 +30,8 @@ export interface ZipEntry {
   readonly flags: number;
   readonly versionNeeded: number;
   readonly lastModTime: number;
+  readonly versionMadeBy: number;
+  readonly madeByHost: number;
   readonly compressionMethod: number;
   readonly rawCompressionMethod: number;
   readonly crc32: number;
@@ -39,8 +41,10 @@ export interface ZipEntry {
   readonly centralNameLength: number;
   readonly centralExtraLength: number;
   readonly externalAttributes: number;
+  readonly unixMode: number | undefined;
   readonly kind: "file" | "directory";
   readonly isSymlink: boolean;
+  readonly isSpecialFile: boolean;
   readonly encrypted: boolean;
   readonly encryptionMethod: ZipEncryptionMethod;
   readonly aesExtra: ZipAesExtra | undefined;
@@ -101,7 +105,9 @@ export class ZipArchive {
         fail(`${this.label}: invalid central directory entry`);
       }
 
+      const versionMadeBy = view.getUint16(cursor + 4, true);
       const versionNeeded = view.getUint16(cursor + 6, true);
+      const madeByHost = versionMadeBy >>> 8;
       const flags = view.getUint16(cursor + 8, true);
       const rawCompressionMethod = view.getUint16(cursor + 10, true);
       const lastModTime = view.getUint16(cursor + 12, true);
@@ -142,9 +148,15 @@ export class ZipArchive {
       const compressedSize = zip64.compressedSize;
       const uncompressedSize = zip64.uncompressedSize;
       const localHeaderOffset = zip64.localHeaderOffset;
-      const mode = (externalAttributes >>> 16) & 0o170000;
-      const isSymlink = mode === 0o120000;
-      const kind = rawPath.endsWith("/") || mode === 0o040000 ? "directory" : "file";
+      const unixMode = readUnixMode(madeByHost, externalAttributes);
+      const fileType = unixMode === undefined ? 0 : unixMode & 0o170000;
+      const isSymlink = fileType === 0o120000;
+      const isSpecialFile =
+        fileType !== 0 &&
+        fileType !== 0o040000 &&
+        fileType !== 0o100000 &&
+        fileType !== 0o120000;
+      const kind = rawPath.endsWith("/") || fileType === 0o040000 ? "directory" : "file";
 
       entries.push({
         id: `${this.label}:${index}:${path}`,
@@ -154,6 +166,8 @@ export class ZipArchive {
         rawPath,
         flags,
         versionNeeded,
+        versionMadeBy,
+        madeByHost,
         lastModTime,
         compressionMethod,
         rawCompressionMethod,
@@ -164,8 +178,10 @@ export class ZipArchive {
         centralNameLength: nameLength,
         centralExtraLength: extraLength,
         externalAttributes,
+        unixMode,
         kind,
         isSymlink,
+        isSpecialFile,
         encrypted,
         encryptionMethod,
         aesExtra,
@@ -475,6 +491,15 @@ function readEncryptionMethod(
   }
 
   return "zipcrypto";
+}
+
+function readUnixMode(madeByHost: number, externalAttributes: number): number | undefined {
+  if (madeByHost !== 3 && madeByHost !== 19) {
+    return undefined;
+  }
+
+  const mode = (externalAttributes >>> 16) & 0xffff;
+  return mode === 0 ? undefined : mode;
 }
 
 function readZip64Extra(

@@ -225,6 +225,7 @@ describe("pickarc commands", () => {
       compressedSize: 5,
       uncompressedSize: 5,
       isSymlink: false,
+      isSpecialFile: false,
     });
     expect(entries[0].crc32).toMatch(/^[0-9a-f]{8}$/);
 
@@ -282,6 +283,116 @@ describe("pickarc commands", () => {
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain("CRC32 mismatch");
     await expect(stat(path.join(directory, "bad.txt"))).rejects.toThrow();
+  });
+
+  test("cp refuses ZIP special file entries", async () => {
+    const directory = await makeTempDir();
+    const archive = await writeZip(directory, "fixture.zip", [
+      { path: "pipe", externalAttributes: 0o010644 << 16 },
+    ]);
+
+    const result = await runPickarc(["cp", archive], directory);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("special file");
+    await expect(stat(path.join(directory, "pipe"))).rejects.toThrow();
+  });
+
+  test("cp applies owner permissions by default", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const directory = await makeTempDir();
+    const archive = await writeZip(directory, "fixture.zip", [
+      { path: "bin/", externalAttributes: 0o040775 << 16 },
+      { path: "bin/tool", data: "tool", externalAttributes: 0o100775 << 16 },
+      { path: "world.txt", data: "world", externalAttributes: 0o100666 << 16 },
+    ]);
+
+    const result = await runPickarc(
+      ["cp", "--replace", "^(.*)$", "owner/$1", archive],
+      directory,
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(await modeOf(path.join(directory, "owner/bin"))).toBe(0o700);
+    expect(await modeOf(path.join(directory, "owner/bin/tool"))).toBe(0o700);
+    expect(await modeOf(path.join(directory, "owner/world.txt"))).toBe(0o600);
+  });
+
+  test("cp supports preserve, sanitize, and private permission policies", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const directory = await makeTempDir();
+    const archive = await writeZip(directory, "fixture.zip", [
+      { path: "bin/", externalAttributes: 0o040777 << 16 },
+      { path: "bin/tool", data: "tool", externalAttributes: 0o100777 << 16 },
+      { path: "world.txt", data: "world", externalAttributes: 0o100666 << 16 },
+    ]);
+
+    const preserve = await runPickarc(
+      ["cp", "--permissions", "preserve", "--replace", "^(.*)$", "preserve/$1", archive],
+      directory,
+    );
+    const sanitize = await runPickarc(
+      ["cp", "--permissions", "sanitize", "--replace", "^(.*)$", "sanitize/$1", archive],
+      directory,
+    );
+    const privateMode = await runPickarc(
+      ["cp", "--permissions", "private", "--replace", "^(.*)$", "private/$1", archive],
+      directory,
+    );
+
+    expect(preserve.exitCode).toBe(0);
+    expect(sanitize.exitCode).toBe(0);
+    expect(privateMode.exitCode).toBe(0);
+    expect(await modeOf(path.join(directory, "preserve/bin"))).toBe(0o777);
+    expect(await modeOf(path.join(directory, "preserve/bin/tool"))).toBe(0o777);
+    expect(await modeOf(path.join(directory, "preserve/world.txt"))).toBe(0o666);
+    expect(await modeOf(path.join(directory, "sanitize/bin"))).toBe(0o755);
+    expect(await modeOf(path.join(directory, "sanitize/bin/tool"))).toBe(0o755);
+    expect(await modeOf(path.join(directory, "sanitize/world.txt"))).toBe(0o644);
+    expect(await modeOf(path.join(directory, "private/bin"))).toBe(0o700);
+    expect(await modeOf(path.join(directory, "private/bin/tool"))).toBe(0o600);
+    expect(await modeOf(path.join(directory, "private/world.txt"))).toBe(0o600);
+  });
+
+  test("cp drops special mode bits unless explicitly preserved", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const directory = await makeTempDir();
+    const archive = await writeZip(directory, "fixture.zip", [
+      { path: "sticky/", externalAttributes: 0o041777 << 16 },
+    ]);
+
+    const dropped = await runPickarc(
+      ["cp", "--permissions", "preserve", "--replace", "^(.*)$", "dropped/$1", archive],
+      directory,
+    );
+    const preserved = await runPickarc(
+      [
+        "cp",
+        "--permissions",
+        "preserve",
+        "--preserve-special-mode",
+        "sticky",
+        "--replace",
+        "^(.*)$",
+        "preserved/$1",
+        archive,
+      ],
+      directory,
+    );
+
+    expect(dropped.exitCode).toBe(0);
+    expect(preserved.exitCode).toBe(0);
+    expect(await modeOf(path.join(directory, "dropped/sticky"))).toBe(0o777);
+    expect(await modeOf(path.join(directory, "preserved/sticky"))).toBe(0o1777);
   });
 
   test("cp can render forced progress with bold labels and cyan bars", async () => {
@@ -442,6 +553,10 @@ async function runPickarc(
 
 async function readText(file: string): Promise<string> {
   return new TextDecoder().decode(await readFile(file));
+}
+
+async function modeOf(file: string): Promise<number> {
+  return (await stat(file)).mode & 0o7777;
 }
 
 function processEnv(): Record<string, string> {

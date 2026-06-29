@@ -1,6 +1,12 @@
 import { fail } from "./errors.ts";
 import { globMatcher, regexMatcher, type PathMatcher } from "./matcher.ts";
 import type { PathOperation } from "./path-pipeline.ts";
+import {
+  parsePermissionsMode,
+  parseSpecialModeName,
+  specialModeMaskFor,
+  type PermissionsMode,
+} from "./permissions.ts";
 
 export type Command = "ls" | "cat" | "cp" | "du" | "stat";
 export type ProgressMode = "auto" | "always" | "never";
@@ -35,6 +41,8 @@ export interface ParsedArgs {
   proxy: string | undefined;
   insecure: boolean;
   lockdown: string | undefined;
+  permissions: PermissionsMode;
+  specialModeBits: number;
   progress: ProgressMode;
   jobs: number;
   json: boolean;
@@ -66,6 +74,8 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
   let proxy: string | undefined;
   let insecure = false;
   let lockdown: string | undefined;
+  let permissions: PermissionsMode = "owner";
+  let specialModeBits = 0;
   let progress: ProgressMode = "auto";
   let jobs = 1;
   let json = false;
@@ -106,6 +116,16 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
 
       case "--lockdown":
         lockdown = requireValue(argv, ++index, arg);
+        break;
+
+      case "--permissions":
+        permissions = parsePermissionsMode(requireValue(argv, ++index, arg));
+        break;
+
+      case "--preserve-special-mode":
+        specialModeBits |= specialModeMaskFor(
+          parseSpecialModeName(requireValue(argv, ++index, arg)),
+        );
         break;
 
       case "--progress":
@@ -382,6 +402,8 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
     proxy,
     insecure,
     lockdown,
+    permissions,
+    specialModeBits,
     progress,
     jobs,
     json,

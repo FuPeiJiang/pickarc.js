@@ -177,7 +177,26 @@ pickarc cp archive.zip \
   --replace '^src/(.*)$' './out/$1'
 ```
 
-`cp` writes files with exclusive create flags and `O_NOFOLLOW`, mode `0600`, and refuses to overwrite existing files. Existing symlinked parent directories are rejected during directory creation/walk checks.
+`cp` writes files with exclusive create flags and `O_NOFOLLOW`, and refuses to overwrite existing files. Existing symlinked parent directories are rejected during directory creation/walk checks.
+
+Permission handling is controlled by:
+
+```sh
+--permissions owner
+--permissions preserve
+--permissions sanitize
+--permissions private
+--preserve-special-mode sticky
+--preserve-special-mode setgid
+--preserve-special-mode setuid
+--preserve-special-mode all
+```
+
+The default is `--permissions owner`: preserve only the archive owner permission bits, so `0755` becomes `0700` and `0644` becomes `0600`. `preserve` keeps normal `0o777` Unix mode bits, `sanitize` keeps normal mode bits but removes group/other write, and `private` forces files to `0600` and directories to `0700`.
+
+Special mode bits are dropped unless explicitly requested with repeatable `--preserve-special-mode` flags. Symlinks and special file types are still refused.
+
+Files and directories are created private first. File modes are applied after the file is written successfully; directory modes are applied after extraction, deepest directory first. On Windows, permission handling is best-effort because POSIX modes do not map cleanly to Windows ACLs.
 
 For remote ZIPs, `cp` validates final paths first, then downloads files in physical archive order. It plans selected byte ranges from ZIP metadata, merges nearby compressed ranges into bounded reads, and serves per-file extraction from that cache instead of making thousands of tiny requests.
 

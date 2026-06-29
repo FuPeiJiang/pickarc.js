@@ -4,10 +4,20 @@ import path from "node:path";
 import { fail } from "./errors.ts";
 
 const windowsAbsolutePath = /^[A-Za-z]:\//;
+const initialFileMode = 0o600;
+const initialDirectoryMode = 0o700;
 
 export interface ResolvedOutputPath {
   target: string;
   lockdownRoot: string | undefined;
+}
+
+export interface SafeWriteResult {
+  createdDirectories: string[];
+}
+
+export interface CreateDirectoryResult extends SafeWriteResult {
+  target: string;
 }
 
 export async function resolveOutputPath(
@@ -37,9 +47,10 @@ export async function writeFileExclusive(
   finalPath: string,
   data: Uint8Array,
   lockdown: string | undefined,
-): Promise<void> {
+  mode: number,
+): Promise<SafeWriteResult> {
   const { target, lockdownRoot } = await resolveOutputPath(finalPath, lockdown);
-  await ensureDirectory(path.dirname(target), lockdownRoot);
+  const createdDirectories = await ensureDirectory(path.dirname(target), lockdownRoot);
 
   let handle;
 
@@ -47,7 +58,7 @@ export async function writeFileExclusive(
     handle = await open(
       target,
       constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
-      0o600,
+      initialFileMode,
     );
   } catch (error) {
     failOpen(target, error);
@@ -55,19 +66,25 @@ export async function writeFileExclusive(
 
   try {
     await handle.writeFile(data);
+    await chmodOpenHandle(handle, mode);
   } finally {
     await handle.close();
   }
+
+  return {
+    createdDirectories,
+  };
 }
 
 export async function writeFileExclusiveStream(
   finalPath: string,
   chunks: AsyncIterable<Uint8Array>,
   lockdown: string | undefined,
+  mode: number,
   onChunk?: (bytes: number) => void,
-): Promise<void> {
+): Promise<SafeWriteResult> {
   const { target, lockdownRoot } = await resolveOutputPath(finalPath, lockdown);
-  await ensureDirectory(path.dirname(target), lockdownRoot);
+  const createdDirectories = await ensureDirectory(path.dirname(target), lockdownRoot);
 
   let handle;
   let completed = false;
@@ -76,7 +93,7 @@ export async function writeFileExclusiveStream(
     handle = await open(
       target,
       constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
-      0o600,
+      initialFileMode,
     );
   } catch (error) {
     failOpen(target, error);
@@ -88,6 +105,7 @@ export async function writeFileExclusiveStream(
       onChunk?.(chunk.byteLength);
     }
 
+    await chmodOpenHandle(handle, mode);
     completed = true;
   } finally {
     await handle.close();
@@ -96,11 +114,50 @@ export async function writeFileExclusiveStream(
       await unlink(target).catch(() => undefined);
     }
   }
+
+  return {
+    createdDirectories,
+  };
 }
 
-export async function createDirectory(finalPath: string, lockdown: string | undefined): Promise<void> {
+export async function createDirectory(
+  finalPath: string,
+  lockdown: string | undefined,
+): Promise<CreateDirectoryResult> {
   const { target, lockdownRoot } = await resolveOutputPath(finalPath, lockdown);
-  await ensureDirectory(target, lockdownRoot);
+  return {
+    target,
+    createdDirectories: await ensureDirectory(target, lockdownRoot),
+  };
+}
+
+export async function chmodCreatedDirectory(target: string, mode: number): Promise<void> {
+  const info = await lstat(target);
+
+  if (info.isSymbolicLink()) {
+    fail(`${target}: refused symlinked directory during chmod`);
+  }
+
+  if (!info.isDirectory()) {
+    fail(`${target}: expected a directory during chmod`);
+  }
+
+  const flags = process.platform === "win32"
+    ? constants.O_RDONLY
+    : constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW;
+  let handle;
+
+  try {
+    handle = await open(target, flags);
+  } catch (error) {
+    failOpen(target, error);
+  }
+
+  try {
+    await chmodOpenHandle(handle, mode);
+  } finally {
+    await handle.close();
+  }
 }
 
 async function resolveLockdownRoot(lockdown: string): Promise<string> {
@@ -124,17 +181,18 @@ async function resolveLockdownRoot(lockdown: string): Promise<string> {
   return root;
 }
 
-async function ensureDirectory(directory: string, lockdownRoot: string | undefined): Promise<void> {
+async function ensureDirectory(directory: string, lockdownRoot: string | undefined): Promise<string[]> {
   if (lockdownRoot !== undefined && !isWithin(lockdownRoot, directory)) {
     fail(`${directory}: directory escapes lockdown root ${lockdownRoot}`);
   }
 
+  const createdDirectories: string[] = [];
   const root = path.parse(directory).root;
   const relative = path.relative(root, directory);
   let current = root;
 
   if (relative === "") {
-    return;
+    return createdDirectories;
   }
 
   for (const part of relative.split(path.sep)) {
@@ -152,7 +210,7 @@ async function ensureDirectory(directory: string, lockdownRoot: string | undefin
       }
     } catch (error) {
       if (isNotFound(error)) {
-        await mkdir(current, { mode: 0o700 }).catch((mkdirError: unknown) => {
+        await mkdir(current, { mode: initialDirectoryMode }).catch((mkdirError: unknown) => {
           if (!isAlreadyExists(mkdirError)) {
             throw mkdirError;
           }
@@ -163,12 +221,15 @@ async function ensureDirectory(directory: string, lockdownRoot: string | undefin
           fail(`${current}: failed to create safe directory`);
         }
 
+        createdDirectories.push(current);
         continue;
       }
 
       throw error;
     }
   }
+
+  return createdDirectories;
 }
 
 function isWithin(root: string, target: string): boolean {
@@ -211,5 +272,34 @@ async function writeAll(
   while (offset < chunk.byteLength) {
     const result = await handle.write(chunk, offset, chunk.byteLength - offset);
     offset += result.bytesWritten;
+  }
+}
+
+async function chmodOpenHandle(
+  handle: Awaited<ReturnType<typeof open>>,
+  mode: number,
+): Promise<void> {
+  if ((mode & 0o7000) === 0 || process.platform === "win32") {
+    await handle.chmod(mode);
+    return;
+  }
+
+  if (process.platform !== "linux") {
+    await handle.chmod(mode);
+    return;
+  }
+
+  const fdPath = `/proc/${process.pid}/fd/${handle.fd}`;
+  const child = Bun.spawn(["chmod", mode.toString(8), fdPath], {
+    stderr: "pipe",
+    stdout: "ignore",
+  });
+  const [stderr, exitCode] = await Promise.all([
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+
+  if (exitCode !== 0) {
+    fail(`chmod ${mode.toString(8)}: ${stderr.trim() || `exited with code ${exitCode}`}`);
   }
 }

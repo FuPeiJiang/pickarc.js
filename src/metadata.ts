@@ -29,6 +29,7 @@ interface StatJson {
   uncompressedSize: number;
   crc32: string | undefined;
   isSymlink: boolean;
+  isSpecialFile: boolean;
   localHeaderOffset: number | undefined;
 }
 
@@ -332,6 +333,7 @@ function candidateToStatJson(candidate: PathCandidate): StatJson {
     uncompressedSize: candidate.kind === "file" ? candidate.uncompressedSize : 0,
     crc32: formatCrc32(candidate.crc32),
     isSymlink: candidate.isSymlink,
+    isSpecialFile: candidate.isSpecialFile,
     localHeaderOffset: candidate.physicalOffset,
   };
 }

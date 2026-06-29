@@ -47,7 +47,7 @@ export function makeZip(entries: readonly ZipFixtureEntry[]): Uint8Array {
     centralView.setUint32(20, compressed.byteLength, true);
     centralView.setUint32(24, data.byteLength, true);
     centralView.setUint16(28, name.byteLength, true);
-    centralView.setUint32(38, entry.externalAttributes ?? defaultExternalAttributes(entry.path));
+    centralView.setUint32(38, entry.externalAttributes ?? defaultExternalAttributes(entry.path), true);
     centralView.setUint32(42, localOffset, true);
     central.set(name, 46);
     centralDirectory.push(central);

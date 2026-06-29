@@ -41,6 +41,8 @@ Options:
   --proxy <url>
   -k, --insecure    Disable TLS certificate verification. Dangerous.
   --lockdown <path>
+  --permissions <preserve|sanitize|owner|private>
+  --preserve-special-mode <setuid|setgid|sticky|all>
   --progress <auto|always|never>, --no-progress
   --jobs <n>
   --json, --jsonl

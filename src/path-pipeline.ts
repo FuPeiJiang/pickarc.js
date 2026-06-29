@@ -50,7 +50,9 @@ export interface PathCandidate {
   uncompressedSize: number;
   physicalOffset: number | undefined;
   absoluteFromReplace: boolean;
+  unixMode: number | undefined;
   isSymlink: boolean;
+  isSpecialFile: boolean;
   encrypted: boolean;
   encryptionMethod: "none" | "zipcrypto" | "aes";
   readData: (options: { checkCrc: boolean; password?: string | undefined }) => Promise<Uint8Array>;
