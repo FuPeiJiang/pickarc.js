@@ -45,7 +45,7 @@ interface DirectoryNode {
   explicitMode: number | undefined;
 }
 
-const childMapThreshold = 64;
+const childMapThreshold = 16;
 
 export class DirectoryEnsurer {
   private readonly lockdownRoot: string | undefined;
