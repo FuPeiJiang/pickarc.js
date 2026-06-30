@@ -334,7 +334,7 @@ describe("pickarc commands", () => {
   });
 
   test("cp extracts ZIP FIFO entries only when allowed", async () => {
-    if (process.platform === "win32") {
+    if (process.platform === "win32" || isAndroidRuntime()) {
       return;
     }
 
@@ -353,7 +353,7 @@ describe("pickarc commands", () => {
   });
 
   test("cp extracts ZIP socket entries only when allowed", async () => {
-    if (process.platform === "win32") {
+    if (process.platform === "win32" || isAndroidRuntime()) {
       return;
     }
 
@@ -449,7 +449,7 @@ describe("pickarc commands", () => {
   });
 
   test("cp drops special mode bits unless explicitly preserved", async () => {
-    if (process.platform === "win32") {
+    if (process.platform === "win32" || isAndroidRuntime()) {
       return;
     }
 
@@ -721,6 +721,10 @@ function processEnv(): Record<string, string> {
   }
 
   return env;
+}
+
+function isAndroidRuntime(): boolean {
+  return (process.platform as string) === "android";
 }
 
 function mergeEnv(overrides: Record<string, string | undefined> | undefined): Record<string, string> {

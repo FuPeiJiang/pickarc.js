@@ -694,6 +694,11 @@ function fchmod(): (fd: number, mode: number) => number {
   }
 
   const candidates = fchmodLibraryCandidates();
+
+  if (candidates.length === 0) {
+    fail(`native special-file functions are not supported on this platform`);
+  }
+
   const errors: string[] = [];
 
   for (let index = 0; index < candidates.length; index += 1) {
@@ -844,10 +849,13 @@ function failNativeSpecial(
 }
 
 export function fchmodLibraryCandidates(
-  platform: NodeJS.Platform = process.platform,
+  platform: NodeJS.Platform | "android" = process.platform as NodeJS.Platform | "android",
   arch: NodeJS.Architecture = process.arch,
 ): string[] {
   switch (platform) {
+    case "android":
+      return [];
+
     case "darwin":
       return ["libSystem.B.dylib", "libSystem.dylib"];
 

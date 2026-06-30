@@ -26,6 +26,10 @@ describe("safe write native chmod support", () => {
     ]);
   });
 
+  test("does not use native chmod FFI on Android", () => {
+    expect(fchmodLibraryCandidates("android", "x64")).toEqual([]);
+  });
+
   test("does not use native chmod FFI on unsupported platforms", () => {
     expect(fchmodLibraryCandidates("win32", "x64")).toEqual([]);
     expect(fchmodLibraryCandidates("freebsd", "x64")).toEqual([]);
